@@ -1,6 +1,4 @@
-# vibe-code
-
-A collection of small utility projects and experiments.
+_This is a collection of small projects and experiments. Mostly just me playing with Claude Code._
 
 ## Projects
 
