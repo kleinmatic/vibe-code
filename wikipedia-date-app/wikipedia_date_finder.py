@@ -19,7 +19,7 @@ from bs4 import BeautifulSoup
 # Wikipedia API configuration
 WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
 FEED_API = "https://api.wikimedia.org/feed/v1/wikipedia/en/onthisday"
-USER_AGENT = "WikipediaDateFinder/3.0 (Educational script; github.com/example)"
+USER_AGENT = "WikipediaDateFinder/3.0 (Educational script; github.com/kleinmatic/vibe-code)"
 
 # Headers for all requests
 HEADERS = {
