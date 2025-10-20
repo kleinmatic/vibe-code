@@ -1,6 +1,12 @@
 # Datawrapper Annual Totals Chart
 
-This project creates a column chart visualization of annual totals from `data-for-claude.csv` using the Datawrapper Python API.
+This is an example project demonstrating the [datawrapper](https://github.com/chekos/Datawrapper) Python library. It was created by having Claude Code read the library's [documentation](https://datawrapper.readthedocs.io/en/latest/index.html) and then writing working code.
+
+**Credit:** This project uses the excellent [datawrapper Python library](https://github.com/chekos/Datawrapper) by the news apps team at Reuters, which provides a clean Python wrapper for the Datawrapper API.
+
+## What It Does
+
+Creates a column chart visualization of annual totals from `data-for-claude.csv` using the Datawrapper Python API.
 
 ## Setup
 
