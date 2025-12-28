@@ -26,23 +26,24 @@ from bs4 import BeautifulSoup
 class NiemanPredictionsDownloader:
     """Download and save Nieman Lab predictions articles."""
 
+    # Collection RSS feeds - these have ALL articles for each year
+    COLLECTION_RSS_FEEDS = [
+        "https://www.niemanlab.org/collection/predictions-2026/feed/",
+        #"https://www.niemanlab.org/collection/predictions-2025/feed/",
+        #"https://www.niemanlab.org/collection/predictions-2024/feed/",
+        #"https://www.niemanlab.org/collection/predictions-2023/feed/",
+        #"https://www.niemanlab.org/collection/predictions-2022/feed/",
+        #"https://www.niemanlab.org/collection/predictions-2021/feed/",
+        #"https://www.niemanlab.org/collection/predictions-2020/feed/",
+        #"https://www.niemanlab.org/collection/predictions-2019/feed/",
+        #"https://www.niemanlab.org/collection/predictions-2018/feed/",
+        #"https://www.niemanlab.org/collection/predictions-2017/feed/",
+    ]
+
+    # Also use general feeds for additional coverage
     RSS_FEEDS = [
         "https://feeds.feedburner.com/NiemanJournalismLab",
         "https://www.niemanlab.org/tag/predictions/feed/",
-    ]
-
-    # Collection pages for each year
-    COLLECTION_URLS = [
-        "https://www.niemanlab.org/collection/predictions-2026/",
-        "https://www.niemanlab.org/collection/predictions-2025/",
-        "https://www.niemanlab.org/collection/predictions-2024/",
-        "https://www.niemanlab.org/collection/predictions-2023/",
-        "https://www.niemanlab.org/collection/predictions-2022/",
-        "https://www.niemanlab.org/collection/predictions-2021/",
-        "https://www.niemanlab.org/collection/predictions-2020/",
-        "https://www.niemanlab.org/collection/predictions-2019/",
-        "https://www.niemanlab.org/collection/predictions-2018/",
-        "https://www.niemanlab.org/collection/predictions-2017/",
     ]
 
     def __init__(self, output_dir: str = "predictions_data"):
@@ -64,9 +65,53 @@ class NiemanPredictionsDownloader:
         self.downloaded = set()
 
     def fetch_rss_feeds(self) -> List[Dict]:
-        """Fetch articles from all RSS feeds."""
+        """Fetch articles from all RSS feeds including collection feeds with pagination."""
         articles = []
 
+        # Fetch from collection RSS feeds with pagination
+        for feed_url in self.COLLECTION_RSS_FEEDS:
+            print(f"Fetching RSS feed: {feed_url}")
+            page = 1
+            total_for_feed = 0
+
+            while True:
+                try:
+                    # Add pagination parameter
+                    paginated_url = f"{feed_url}?paged={page}"
+                    feed = feedparser.parse(paginated_url)
+
+                    if len(feed.entries) == 0:
+                        break
+
+                    for entry in feed.entries:
+                        article_url = entry.get('link', '')
+                        if article_url:
+                            self.article_urls.add(article_url)
+                            articles.append({
+                                'url': article_url,
+                                'title': entry.get('title', ''),
+                                'author': entry.get('author', entry.get('dc_creator', '')),
+                                'published': entry.get('published', ''),
+                                'summary': entry.get('summary', ''),
+                                'categories': [cat.get('term', '') for cat in entry.get('tags', [])],
+                            })
+
+                    total_for_feed += len(feed.entries)
+                    print(f"  Page {page}: {len(feed.entries)} articles")
+                    page += 1
+
+                    # Safety limit
+                    if page > 20:
+                        print(f"  Stopped at page {page-1} (safety limit)")
+                        break
+
+                except Exception as e:
+                    print(f"  Error fetching page {page}: {e}")
+                    break
+
+            print(f"  Total from this feed: {total_for_feed} articles")
+
+        # Fetch from general RSS feeds (no pagination needed, they're small)
         for feed_url in self.RSS_FEEDS:
             print(f"Fetching RSS feed: {feed_url}")
             try:
@@ -262,26 +307,27 @@ class NiemanPredictionsDownloader:
         print("NIEMAN LAB PREDICTIONS DOWNLOADER")
         print("=" * 80)
 
-        # Step 1: Get articles from RSS feeds
-        print("\n[1/3] Fetching RSS feeds...")
+        # Step 1: Get articles from RSS feeds (including collection-specific feeds)
+        print("\n[1/2] Fetching RSS feeds (including all collection feeds)...")
         rss_articles = self.fetch_rss_feeds()
-        print(f"Total unique URLs from RSS: {len(self.article_urls)}")
+        print(f"Total unique article URLs found: {len(self.article_urls)}")
 
-        # Step 2: Scrape collection pages for more article URLs
-        print("\n[2/3] Scraping collection pages...")
-        for collection_url in self.COLLECTION_URLS:
-            urls = self.scrape_collection_page(collection_url)
-            self.article_urls.update(urls)
-            time.sleep(1)  # Be respectful with rate limiting
-
-        print(f"Total unique article URLs: {len(self.article_urls)}")
-
-        # Step 3: Download individual articles
-        print(f"\n[3/3] Downloading {len(self.article_urls)} articles...")
+        # Step 2: Download individual articles
+        print(f"\n[2/2] Downloading {len(self.article_urls)} articles...")
         successful = 0
         failed = 0
 
         for i, url in enumerate(sorted(self.article_urls), 1):
+            # Check if already downloaded
+            url_path = urlparse(url).path
+            filename = url_path.strip('/').replace('/', '_') + '.json'
+            filepath = self.output_dir / filename
+
+            if filepath.exists():
+                print(f"\n[{i}/{len(self.article_urls)}] Skipping (already exists): {url}")
+                successful += 1
+                continue
+
             print(f"\n[{i}/{len(self.article_urls)}]", end=" ")
             article_data = self.fetch_article_content(url)
 

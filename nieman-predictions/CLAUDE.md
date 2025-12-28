@@ -18,8 +18,19 @@ Download all Nieman Lab predictions articles with metadata (author, date, URL, t
 ### Collection Pages
 - URL pattern: `https://www.niemanlab.org/collection/predictions-YYYY/`
 - Available years: 2017, 2018, 2020, 2021, 2022, 2023, 2024, 2025, 2026
-- **Issue**: Direct WebFetch attempts returned 403 Forbidden
-- **Solution**: Use requests library with browser-like headers in the Python script
+- **Issue #1**: Direct WebFetch attempts returned 403 Forbidden
+- **Issue #2**: Collection pages load articles via JavaScript - only ~1 article link visible in initial HTML
+- **Solution**: Use collection-specific RSS feeds instead of scraping pages
+
+### Collection RSS Feeds (CRITICAL - THIS IS THE SOLUTION)
+- URL pattern: `https://www.niemanlab.org/collection/predictions-YYYY/feed/`
+- **These RSS feeds contain ALL articles for each year's predictions via pagination**
+- Each page returns 30 articles
+- Pagination parameter: `?paged=N` (e.g., `?paged=2` for page 2)
+- Example: 2026 predictions has 7 pages = 210 total articles
+- Much more complete than main feed which only shows ~16 recent items
+
+**Implementation**: The script now uses `COLLECTION_RSS_FEEDS` list and paginates through each feed using `?paged=N` parameter, eliminating the need to scrape JavaScript-heavy collection pages.
 
 ### Prediction Identification
 Since there's no dedicated "prediction" category in the feed, the script uses multiple heuristics:
@@ -63,8 +74,8 @@ nieman-predictions/
 
 1. **Website structure changes**: If Nieman Lab redesigns, the HTML selectors in `fetch_article_content()` may need updating
 2. **Rate limiting**: If downloading fails, may need to increase delays or add retry logic
-3. **New collection years**: Add new years to `COLLECTION_URLS` list as they're published
-4. **RSS feed changes**: FeedBurner could change or be deprecated
+3. **New collection years**: Add new years to `COLLECTION_RSS_FEEDS` list as they're published (e.g., in Dec 2026, add predictions-2027/feed/)
+4. **RSS feed changes**: If collection RSS feeds change structure or are deprecated, may need alternate approach
 
 ## Future Enhancements
 
@@ -84,9 +95,30 @@ If needed later:
 
 ## Testing Status
 - RSS feed parsing: ✓ Verified working
-- Collection page structure: ✓ Analyzed (2026 collection)
-- Article download: Not tested (requires dependency installation)
-- Metadata extraction: Not tested (requires dependency installation)
+- Collection RSS feeds: ✓ Verified working (100+ articles per year)
+- Collection page scraping: ✗ Deprecated (JavaScript loading issue)
+- Article download: ✓ Tested and working
+- Metadata extraction: ✓ Tested and working
+
+## Troubleshooting
+
+### Only getting 30-40 articles instead of 200+
+**Problem**: Script only downloads 30-40 articles when there should be 200+ (for 2026)
+
+**Cause #1**: Collection pages load articles via JavaScript, so scraping HTML only gets a few links
+**Cause #2**: RSS feeds are paginated (30 articles per page)
+
+**Solution**: ✓ Fixed - Script now uses collection RSS feeds with pagination
+- Script paginates through all pages using `?paged=N` parameter
+- 2026 predictions: 7 pages × 30 articles = 210 total
+- Ensure `COLLECTION_RSS_FEEDS` is uncommented for the years you want
+
+### Missing recent predictions
+**Problem**: Recent predictions don't appear in older RSS feeds
+
+**Solution**: Use the collection-specific RSS feed for that year
+- 2026 predictions: `https://www.niemanlab.org/collection/predictions-2026/feed/`
+- Published in Dec 2025 with URLs like `/2025/12/article-slug/`
 
 ## Next Steps When Resuming
 1. Install dependencies: `pip install -r requirements.txt`
