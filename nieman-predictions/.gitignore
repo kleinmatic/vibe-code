@@ -1,0 +1,11 @@
+# Downloaded predictions data (copyrighted material)
+predictions_data/
+
+# Python virtual environment
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# LLM export files
+*_for_llm.txt
