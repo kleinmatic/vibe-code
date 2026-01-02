@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 System Health Check TUI
-Comprehensive non-destructive diagnostics for Raspberry Pi systems
+Comprehensive non-destructive diagnostics for SBC systems
+Supports: Raspberry Pi (3/4/5), Rock5c
 
 Copyright (C) 2025 Scott Klein
 
@@ -56,19 +57,21 @@ def run_command(cmd):
         return None
 
 
-def detect_pi_model():
-    """Detect which Raspberry Pi model we're running on."""
+def detect_board_model():
+    """Detect which SBC model we're running on."""
     model_info = run_command("cat /proc/device-tree/model")
     if not model_info:
         return "Unknown"
 
-    # Extract the Pi model number (e.g., "4", "5")
+    # Extract the board model
     if "Raspberry Pi 5" in model_info:
         return "Pi 5"
     elif "Raspberry Pi 4" in model_info:
         return "Pi 4"
     elif "Raspberry Pi 3" in model_info:
         return "Pi 3"
+    elif "ROCK 5C" in model_info or "Rock 5C" in model_info:
+        return "Rock5c"
     else:
         return "Unknown"
 
@@ -103,8 +106,12 @@ def check_reboot_status():
     return table
 
 
-def check_firmware_updates():
-    """Check for pending Raspberry Pi firmware updates."""
+def check_firmware_updates(board_model="Unknown"):
+    """Check for pending firmware updates (Raspberry Pi only)."""
+    # EEPROM updates are only available on Raspberry Pi boards
+    if not board_model.startswith("Pi"):
+        return None
+
     update_info = run_command("sudo rpi-eeprom-update")
     
     border_color = "green"
@@ -318,23 +325,25 @@ def check_nvme_health(drives=None):
     return table
 
 
-def check_temperatures_and_power(pi_model="Unknown"):
+def check_temperatures_and_power(board_model="Unknown"):
     """Check system temperatures, fan, and power status"""
     # 1. Gather data and determine status level
     status_level = 0  # 0=OK, 1=WARN, 2=FAIL
 
-    # CPU temp data - try vcgencmd first, then fallback to sysfs
+    # CPU temp data - try vcgencmd first (Pi only), then fallback to sysfs
     cpu_temp_val = None
     cpu_temp_str = "N/A"
     cpu_status_text = "[yellow]⚠ UNKNOWN[/yellow]"
-    cpu_temp_out = run_command("vcgencmd measure_temp")
 
-    if cpu_temp_out:
-        temp_match = re.search(r"temp=([\d.]+)'C", cpu_temp_out)
-        if temp_match:
-            cpu_temp_val = float(temp_match.group(1))
+    # Try vcgencmd for Raspberry Pi
+    if board_model.startswith("Pi"):
+        cpu_temp_out = run_command("vcgencmd measure_temp")
+        if cpu_temp_out:
+            temp_match = re.search(r"temp=([\d.]+)'C", cpu_temp_out)
+            if temp_match:
+                cpu_temp_val = float(temp_match.group(1))
 
-    # Fallback: try reading from sysfs (doesn't need sudo)
+    # Fallback: try reading from sysfs (works on all boards)
     if cpu_temp_val is None:
         temp_sysfs = run_command("cat /sys/class/thermal/thermal_zone0/temp")
         if temp_sysfs and temp_sysfs.isdigit():
@@ -352,45 +361,61 @@ def check_temperatures_and_power(pi_model="Unknown"):
         else:
             cpu_status_text = "[green]✓ GOOD[/green]"
 
-    # Fan status data (Pi 5 specific)
+    # Fan status data (board-specific)
     fan_label = None
-    if pi_model == "Pi 5":
+    if board_model == "Pi 5":
+        # Pi 5 uses cooling_device0 for fan
         fan_state = run_command("cat /sys/class/thermal/cooling_device0/cur_state")
         if fan_state:
             fan_labels = {0: "off", 1: "low", 2: "medium"}
             fan_label = fan_labels.get(int(fan_state), "high").capitalize()
         else:
             fan_label = "Unknown"
+    elif board_model == "Rock5c":
+        # Rock5c uses cooling_device5 for PWM fan (states 0-4)
+        fan_state = run_command("cat /sys/class/thermal/cooling_device5/cur_state")
+        if fan_state:
+            try:
+                state = int(fan_state)
+                fan_labels = {0: "Off", 1: "Low", 2: "Medium", 3: "High", 4: "Max"}
+                fan_label = fan_labels.get(state, f"State {state}")
+            except ValueError:
+                fan_label = "Unknown"
 
-    # Power status data
+    # Power status data (Pi only - uses vcgencmd)
     power_value = "N/A"
     power_status_text = "[yellow]⚠ UNKNOWN[/yellow]"
 
-    # Try to get throttle status
-    throttled_out = run_command("vcgencmd get_throttled")
+    if board_model.startswith("Pi"):
+        # Try to get throttle status (Raspberry Pi only)
+        throttled_out = run_command("vcgencmd get_throttled")
 
-    if throttled_out and 'throttled=' in throttled_out:
-        try:
-            val = int(throttled_out.split('=')[1], 16)
-            if val == 0:
-                power_value = "Normal"
-                power_status_text = "[green]✓ OK[/green]"
-            else:
-                status_level = max(status_level, 2)
-                power_value = "Problems Detected"
-                power_details_list = []
-                if val & 0x1: power_details_list.append("Under-voltage now")
-                if val & 0x10000: power_details_list.append("Under-voltage occurred")
-                if val & 0x4: power_details_list.append("Currently throttled")
-                if val & 0x40000: power_details_list.append("Throttling has occurred")
-                if val & 0x2: power_details_list.append("ARM frequency capped now")
-                if val & 0x20000: power_details_list.append("ARM frequency capping occurred")
-                if val & 0x8: power_details_list.append("Soft temperature limit active")
-                if val & 0x80000: power_details_list.append("Soft temperature limit occurred")
-                power_details = ", ".join(power_details_list)
-                power_status_text = f"[red]✗ FAIL[/red]\n{power_details}"
-        except (ValueError, IndexError):
-            pass  # Keep unknown status
+        if throttled_out and 'throttled=' in throttled_out:
+            try:
+                val = int(throttled_out.split('=')[1], 16)
+                if val == 0:
+                    power_value = "Normal"
+                    power_status_text = "[green]✓ OK[/green]"
+                else:
+                    status_level = max(status_level, 2)
+                    power_value = "Problems Detected"
+                    power_details_list = []
+                    if val & 0x1: power_details_list.append("Under-voltage now")
+                    if val & 0x10000: power_details_list.append("Under-voltage occurred")
+                    if val & 0x4: power_details_list.append("Currently throttled")
+                    if val & 0x40000: power_details_list.append("Throttling has occurred")
+                    if val & 0x2: power_details_list.append("ARM frequency capped now")
+                    if val & 0x20000: power_details_list.append("ARM frequency capping occurred")
+                    if val & 0x8: power_details_list.append("Soft temperature limit active")
+                    if val & 0x80000: power_details_list.append("Soft temperature limit occurred")
+                    power_details = ", ".join(power_details_list)
+                    power_status_text = f"[red]✗ FAIL[/red]\n{power_details}"
+            except (ValueError, IndexError):
+                pass  # Keep unknown status
+    else:
+        # For non-Pi boards, power monitoring is not available via vcgencmd
+        power_value = "Not available"
+        power_status_text = "[dim]—[/dim]"
 
     # 2. Determine border color
     border_color = "green"
@@ -406,28 +431,44 @@ def check_temperatures_and_power(pi_model="Unknown"):
     table.add_column("Status", style="bold")
 
     table.add_row("CPU Temperature", cpu_temp_str, cpu_status_text)
-    # Only show fan status on Pi 5
+    # Only show fan status if available
     if fan_label is not None:
         table.add_row("Fan Speed", fan_label, "[green]✓ OK[/green]")
-    table.add_row("Power", power_value, power_status_text)
+    # Only show power status if not "Not available"
+    if power_value != "Not available":
+        table.add_row("Power", power_value, power_status_text)
 
     return table
 
 
 def check_sd_card():
-    """Check microSD card health indicators"""
+    """Check microSD/eMMC card health indicators"""
     # 1. Gather data
     status_level = 0 # 0=OK, 1=WARN, 2=FAIL
     rows = []
 
+    # Detect which mmcblk device is used for root filesystem
+    root_device = run_command("df / | tail -n 1 | awk '{print $1}'")
+    mmcblk_device = None
+    if root_device:
+        # Extract mmcblk device name (e.g., /dev/mmcblk0p2 -> mmcblk0)
+        import re
+        match = re.search(r'(mmcblk\d+)', root_device)
+        if match:
+            mmcblk_device = match.group(1)
+
+    if not mmcblk_device:
+        # Fallback to mmcblk0 if detection fails
+        mmcblk_device = "mmcblk0"
+
     # Card info
-    card_name = run_command("cat /sys/block/mmcblk0/device/name")
-    card_date = run_command("cat /sys/block/mmcblk0/device/date")
+    card_name = run_command(f"cat /sys/block/{mmcblk_device}/device/name")
+    card_date = run_command(f"cat /sys/block/{mmcblk_device}/device/date")
     if card_name and card_date:
         rows.append(("Card Model", f"{card_name} (Mfg: {card_date})", "[green]✓[/green]"))
 
     # Check for errors in dmesg
-    errors_out = run_command("sudo dmesg | grep -i 'mmcblk0.*error' | wc -l")
+    errors_out = run_command(f"sudo dmesg | grep -i '{mmcblk_device}.*error' | wc -l")
     if errors_out:
         error_count = int(errors_out)
         if error_count == 0:
@@ -436,10 +477,12 @@ def check_sd_card():
             status_level = max(status_level, 2)
             rows.append(("Kernel Errors", f"{error_count} errors found", "[red]✗ FAIL[/red]"))
 
-    # Check filesystem
-    mount_info = run_command("mount | grep mmcblk0p2")
+    # Check filesystem (look for root device in mount)
+    mount_info = run_command(f"mount | grep {mmcblk_device}")
     if mount_info:
-        if 'ro' in mount_info:
+        # Check if mounted read-only by looking for (ro, or (ro) in mount options
+        # Avoid false positives from "errors=remount-ro" etc.
+        if '(ro,' in mount_info or '(ro)' in mount_info:
             status_level = max(status_level, 2)
             rows.append(("Mount Status", "Filesystem is read-only!", "[red]✗ READ-ONLY[/red]"))
         else:
@@ -468,7 +511,7 @@ def check_sd_card():
         border_color = "yellow"
     
     # 3. Create and populate table
-    table = Table(title="microSD Card (Boot Drive)", box=box.ROUNDED, show_header=True, expand=True, border_style=border_color)
+    table = Table(title="Boot Drive (microSD/eMMC)", box=box.ROUNDED, show_header=True, expand=True, border_style=border_color)
     table.add_column("Check", style="cyan")
     table.add_column("Details")
     table.add_column("Status", style="bold")
@@ -479,15 +522,16 @@ def check_sd_card():
     return table
 
 
-def check_system_info(pi_model="Unknown"):
+def check_system_info(board_model="Unknown"):
     """Get general system information"""
     table = Table(title="System Information", box=box.ROUNDED, show_header=False, expand=True, border_style="green")
     table.add_column("Property", style="cyan")
     table.add_column("Value", style="bold")
 
-    # Pi Model
-    if pi_model != "Unknown":
-        table.add_row("Model", pi_model)
+    # Device Model (raw from device tree)
+    device_model = run_command("cat /proc/device-tree/model")
+    if device_model:
+        table.add_row("Device", device_model.strip())
 
     # Hostname
     hostname = run_command("hostname")
@@ -544,11 +588,87 @@ def check_system_info(pi_model="Unknown"):
     if kernel:
         table.add_row("Kernel", kernel)
 
+    # CPU Information
+    cpu_count = run_command("nproc")
+    if cpu_count:
+        table.add_row("CPU Cores", cpu_count)
+
+    # Check for heterogeneous CPU architecture (big.LITTLE)
+    lscpu_output = run_command("lscpu")
+    if lscpu_output:
+        # Count different CPU models
+        cpu_models = []
+        lines = lscpu_output.split('\n')
+        for i, line in enumerate(lines):
+            if 'Model name:' in line:
+                model = line.split(':', 1)[1].strip()
+                # Find corresponding core count and frequency
+                cores = threads = max_freq = None
+                for j in range(i-5, min(i+10, len(lines))):
+                    if j < 0:
+                        continue
+                    if 'Core(s) per socket:' in lines[j]:
+                        cores = lines[j].split(':', 1)[1].strip()
+                    if 'Thread(s) per core:' in lines[j]:
+                        threads = lines[j].split(':', 1)[1].strip()
+                    if 'CPU max MHz:' in lines[j]:
+                        max_freq = lines[j].split(':', 1)[1].strip()
+
+                cpu_models.append({
+                    'model': model,
+                    'cores': cores,
+                    'threads': threads,
+                    'max_freq': max_freq
+                })
+
+        # Display CPU information
+        if len(cpu_models) > 1:
+            # Heterogeneous CPU (big.LITTLE)
+            # Note: lscpu typically lists efficiency cores first, then performance cores
+            for idx, cpu in enumerate(cpu_models):
+                if idx == 0:
+                    label = "Efficiency"
+                elif idx == 1:
+                    label = "Performance"
+                else:
+                    label = f"CPU Group {idx+1}"
+
+                freq_ghz = ""
+                if cpu['max_freq']:
+                    try:
+                        freq_ghz = f" @ {float(cpu['max_freq'])/1000:.2f} GHz"
+                    except ValueError:
+                        pass
+
+                cores_info = cpu['cores'] if cpu['cores'] else "?"
+                threads_info = cpu['threads'] if cpu['threads'] else "1"
+                total_threads = int(cores_info) * int(threads_info) if cores_info.isdigit() and threads_info.isdigit() else cores_info
+
+                table.add_row(f"{label} CPU", f"{cores_info}C/{total_threads}T {cpu['model']}{freq_ghz}")
+        elif len(cpu_models) == 1:
+            # Single CPU type
+            cpu = cpu_models[0]
+            cores_info = cpu['cores'] if cpu['cores'] else cpu_count
+            threads_info = cpu['threads'] if cpu['threads'] else "1"
+
+            freq_info = ""
+            if cpu['max_freq']:
+                try:
+                    freq_info = f" @ {float(cpu['max_freq'])/1000:.2f} GHz"
+                except ValueError:
+                    pass
+
+            if cores_info and threads_info:
+                total_threads = int(cores_info) * int(threads_info) if str(cores_info).isdigit() and str(threads_info).isdigit() else cores_info
+                table.add_row("CPU Model", f"{cores_info}C/{total_threads}T {cpu['model']}{freq_info}")
+            else:
+                table.add_row("CPU Model", f"{cpu['model']}{freq_info}")
+
     return table
 
 
 def main():
-    """Main health check routine"""
+    """Main health check routine for SBC systems"""
     console.clear()
 
     # Header
@@ -562,7 +682,7 @@ def main():
 
     # Detect hardware capabilities
     with console.status("[bold blue]Detecting hardware...", spinner="dots"):
-        pi_model = detect_pi_model()
+        board_model = detect_board_model()
         nvme_drives = detect_nvme_drives()
         has_btrfs = detect_btrfs()
 
@@ -570,9 +690,9 @@ def main():
     with console.status("[bold blue]Running diagnostics...", spinner="dots"):
         all_results_raw = [
             check_reboot_status(),
-            check_system_info(pi_model),
-            check_firmware_updates(),
-            check_temperatures_and_power(pi_model),
+            check_system_info(board_model),
+            check_firmware_updates(board_model),
+            check_temperatures_and_power(board_model),
             check_sd_card(),
         ]
 
