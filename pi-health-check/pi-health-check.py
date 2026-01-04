@@ -94,15 +94,86 @@ def detect_btrfs():
 
 
 def check_reboot_status():
-    """Check if a reboot is pending. Returns None if no reboot is required."""
-    if not os.path.exists("/var/run/reboot-required"):
+    """Check if a reboot is pending with comprehensive detection methods."""
+    reboot_required = False
+    reasons = []
+    status_level = 0  # 0=OK, 1=WARN, 2=FAIL
+
+    # Check 1: /var/run/reboot-required (Debian/Ubuntu standard)
+    if os.path.exists("/var/run/reboot-required"):
+        reboot_required = True
+        status_level = max(status_level, 1)
+
+        # Try to get the list of packages that require reboot
+        packages = []
+        if os.path.exists("/var/run/reboot-required.pkgs"):
+            try:
+                with open("/var/run/reboot-required.pkgs", "r") as f:
+                    packages = [pkg.strip() for pkg in f.readlines() if pkg.strip()]
+            except:
+                pass
+
+        if packages:
+            reasons.append(f"Package updates: {', '.join(packages[:5])}")
+            if len(packages) > 5:
+                reasons.append(f"  ... and {len(packages) - 5} more")
+        else:
+            reasons.append("Package updates require reboot")
+
+    # Check 2: Kernel version mismatch (running vs installed)
+    running_kernel = run_command("uname -r")
+    if running_kernel:
+        running_kernel = running_kernel.strip()
+        # Check what kernel versions are installed
+        installed_kernels = run_command("dpkg -l | grep -E 'linux-image-[0-9]' | grep '^ii' | awk '{print $2}' | sed 's/linux-image-//'")
+        if installed_kernels:
+            installed_list = [k.strip() for k in installed_kernels.split('\n') if k.strip()]
+            # Find the newest installed kernel (last in sorted list)
+            if installed_list:
+                installed_list.sort()
+                newest_kernel = installed_list[-1]
+                if newest_kernel != running_kernel:
+                    reboot_required = True
+                    status_level = max(status_level, 1)
+                    reasons.append(f"Kernel updated: {running_kernel} → {newest_kernel}")
+
+    # Check 3: Services using deleted libraries (needs restart or reboot)
+    deleted_libs = run_command("sudo lsof +c 0 2>/dev/null | grep -E '\\(deleted\\)' | awk '{print $1}' | sort -u")
+    if deleted_libs and deleted_libs.strip():
+        services = [s.strip() for s in deleted_libs.split('\n') if s.strip() and s.strip() not in ['systemd', 'systemd-journal']]
+        if services:
+            status_level = max(status_level, 1)
+            reasons.append(f"Services using old libraries: {', '.join(services[:5])}")
+            if len(services) > 5:
+                reasons.append(f"  ... and {len(services) - 5} more")
+
+    # If no reboot is required, return None
+    if not reboot_required and status_level == 0:
         return None
-    
-    border_color = "yellow"
-    table = Table(title="System Status", box=box.ROUNDED, show_header=False, expand=True, border_style=border_color)
+
+    # Create table with results
+    border_color = "green"
+    if status_level == 2:
+        border_color = "red"
+    elif status_level == 1:
+        border_color = "yellow"
+
+    table = Table(title="System Status", box=box.ROUNDED, show_header=True, expand=True, border_style=border_color)
     table.add_column("Item", style="cyan", no_wrap=True)
     table.add_column("Status", style="bold")
-    table.add_row("Reboot Pending", "[yellow]⚠ YES[/yellow]")
+
+    # Main reboot status
+    status_text = "[yellow]⚠ YES[/yellow]" if reboot_required else "[green]✓ NO[/green]"
+    table.add_row("Reboot Pending", status_text)
+
+    # Add reasons as separate rows
+    if reasons:
+        for reason in reasons:
+            if reason.startswith("  ..."):
+                table.add_row("", f"[dim]{reason}[/dim]")
+            else:
+                table.add_row("Reason", f"[yellow]{reason}[/yellow]")
+
     return table
 
 
