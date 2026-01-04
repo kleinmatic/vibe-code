@@ -70,7 +70,7 @@ def detect_board_model():
         return "Pi 4"
     elif "Raspberry Pi 3" in model_info:
         return "Pi 3"
-    elif "ROCK 5C" in model_info or "Rock 5C" in model_info:
+    elif "ROCK 5" in model_info or "Rock 5" in model_info:
         return "Rock5c"
     else:
         return "Unknown"
@@ -372,8 +372,8 @@ def check_temperatures_and_power(board_model="Unknown"):
         else:
             fan_label = "Unknown"
     elif board_model == "Rock5c":
-        # Rock5c uses cooling_device5 for PWM fan (states 0-4)
-        fan_state = run_command("cat /sys/class/thermal/cooling_device5/cur_state")
+        # Rock5c uses cooling_device4 for PWM fan (states 0-4)
+        fan_state = run_command("cat /sys/class/thermal/cooling_device4/cur_state")
         if fan_state:
             try:
                 state = int(fan_state)
@@ -461,11 +461,84 @@ def check_sd_card():
         # Fallback to mmcblk0 if detection fails
         mmcblk_device = "mmcblk0"
 
+    # Detect device type (eMMC vs SD)
+    device_type_raw = run_command(f"cat /sys/block/{mmcblk_device}/device/type")
+    is_emmc = device_type_raw == "MMC" if device_type_raw else False
+    device_type_label = "eMMC" if is_emmc else "microSD"
+
     # Card info
     card_name = run_command(f"cat /sys/block/{mmcblk_device}/device/name")
     card_date = run_command(f"cat /sys/block/{mmcblk_device}/device/date")
     if card_name and card_date:
         rows.append(("Card Model", f"{card_name} (Mfg: {card_date})", "[green]✓[/green]"))
+
+    # eMMC-specific health checks
+    if is_emmc:
+        # Life time estimation (Type A - SLC mode, Type B - MLC mode)
+        life_time_a = run_command(f"cat /sys/block/{mmcblk_device}/device/life_time 2>/dev/null | cut -d' ' -f1")
+        life_time_b = run_command(f"cat /sys/block/{mmcblk_device}/device/life_time 2>/dev/null | cut -d' ' -f2")
+
+        if life_time_a and life_time_b:
+            try:
+                # Convert hex values to int (they're typically in format like 0x01)
+                lt_a = int(life_time_a, 16) if life_time_a.startswith('0x') else int(life_time_a)
+                lt_b = int(life_time_b, 16) if life_time_b.startswith('0x') else int(life_time_b)
+
+                # Interpret life time values (0x01-0x0A = 0-100% in 10% increments, 0x0B = exceeded)
+                def interpret_life_time(val):
+                    if val == 0x00:
+                        return "Not defined", 0
+                    elif val == 0x0B:
+                        return "Exceeded maximum", 2
+                    elif val >= 0x01 and val <= 0x0A:
+                        percent_range = f"{(val-1)*10}-{val*10}%"
+                        warn_level = 2 if val >= 0x09 else (1 if val >= 0x07 else 0)
+                        return percent_range, warn_level
+                    else:
+                        return f"Unknown (0x{val:02x})", 1
+
+                lt_a_str, lt_a_warn = interpret_life_time(lt_a)
+                lt_b_str, lt_b_warn = interpret_life_time(lt_b)
+
+                # Use the worse of the two warnings
+                life_time_warn = max(lt_a_warn, lt_b_warn)
+                status_level = max(status_level, life_time_warn)
+
+                if life_time_warn == 2:
+                    life_status = "[red]✗ CRITICAL[/red]"
+                elif life_time_warn == 1:
+                    life_status = "[yellow]⚠ WARNING[/yellow]"
+                else:
+                    life_status = "[green]✓ GOOD[/green]"
+
+                rows.append(("eMMC Life (A/B)", f"{lt_a_str} / {lt_b_str}", life_status))
+            except (ValueError, IndexError):
+                rows.append(("eMMC Life", "Could not parse", "[yellow]⚠ UNKNOWN[/yellow]"))
+
+        # Pre-EOL (End of Life) information
+        pre_eol = run_command(f"cat /sys/block/{mmcblk_device}/device/pre_eol_info 2>/dev/null")
+        if pre_eol:
+            try:
+                eol_val = int(pre_eol, 16) if pre_eol.startswith('0x') else int(pre_eol)
+
+                if eol_val == 0x01:
+                    eol_str = "Normal"
+                    eol_status = "[green]✓ GOOD[/green]"
+                elif eol_val == 0x02:
+                    eol_str = "Warning (80% reserved blocks used)"
+                    eol_status = "[yellow]⚠ WARNING[/yellow]"
+                    status_level = max(status_level, 1)
+                elif eol_val == 0x03:
+                    eol_str = "Urgent (90% reserved blocks used)"
+                    eol_status = "[red]✗ CRITICAL[/red]"
+                    status_level = max(status_level, 2)
+                else:
+                    eol_str = f"Unknown (0x{eol_val:02x})"
+                    eol_status = "[yellow]⚠ UNKNOWN[/yellow]"
+
+                rows.append(("eMMC Pre-EOL", eol_str, eol_status))
+            except (ValueError, IndexError):
+                rows.append(("eMMC Pre-EOL", "Could not parse", "[yellow]⚠ UNKNOWN[/yellow]"))
 
     # Check for errors in dmesg
     errors_out = run_command(f"sudo dmesg | grep -i '{mmcblk_device}.*error' | wc -l")
@@ -509,11 +582,92 @@ def check_sd_card():
         border_color = "red"
     elif status_level == 1:
         border_color = "yellow"
-    
+
     # 3. Create and populate table
-    table = Table(title="Boot Drive (microSD/eMMC)", box=box.ROUNDED, show_header=True, expand=True, border_style=border_color)
+    table = Table(title=f"Boot Drive ({device_type_label})", box=box.ROUNDED, show_header=True, expand=True, border_style=border_color)
     table.add_column("Check", style="cyan")
     table.add_column("Details")
+    table.add_column("Status", style="bold")
+
+    for row in rows:
+        table.add_row(*row)
+
+    return table
+
+
+def check_led_status():
+    """Check status of onboard LEDs (user-controllable status LEDs only)"""
+    # 1. Gather data
+    status_level = 0  # 0=OK, 1=WARN, 2=FAIL
+    rows = []
+
+    # Scan for user-controllable LEDs (exclude activity indicators like mmc, disk, etc.)
+    led_dir = "/sys/class/leds"
+    if not os.path.exists(led_dir):
+        return None
+
+    # Common LED names to look for across different SBCs
+    # user-led = green LED on Rock5c
+    # blue:status = blue LED on Rock5c
+    # ACT, PWR = Raspberry Pi LEDs
+    led_patterns = ["user-led", "blue:", "green:", "red:", "ACT", "PWR", "led0", "led1"]
+
+    found_leds = []
+    for led_name in os.listdir(led_dir):
+        # Skip activity indicators (mmc, disk, etc.)
+        if any(skip in led_name for skip in ["mmc", "disk", "input", "phy"]):
+            continue
+
+        # Check if it matches our patterns
+        if any(pattern in led_name for pattern in led_patterns):
+            led_path = os.path.join(led_dir, led_name)
+
+            # Read brightness
+            brightness = run_command(f"cat {led_path}/brightness 2>/dev/null")
+            trigger = run_command(f"cat {led_path}/trigger 2>/dev/null")
+
+            if brightness is not None and trigger is not None:
+                # Parse trigger to find active one (enclosed in brackets)
+                import re
+                active_trigger_match = re.search(r'\[([^\]]+)\]', trigger)
+                active_trigger = active_trigger_match.group(1) if active_trigger_match else "none"
+
+                # Determine LED state
+                is_on = int(brightness) > 0 or active_trigger != "none"
+
+                # Friendly LED name
+                friendly_name = led_name
+                if "user-led" in led_name:
+                    friendly_name = "Green LED (user)"
+                elif "blue:status" in led_name:
+                    friendly_name = "Blue LED (status)"
+                elif "ACT" in led_name:
+                    friendly_name = "Activity LED"
+                elif "PWR" in led_name:
+                    friendly_name = "Power LED"
+
+                # Status display
+                if is_on:
+                    if active_trigger == "none":
+                        status = "[green]✓ ON[/green]"
+                    else:
+                        status = f"[green]✓ ON[/green] ({active_trigger})"
+                else:
+                    status = "[dim]— OFF[/dim]"
+
+                rows.append((friendly_name, status))
+                found_leds.append(led_name)
+
+    # If no LEDs found, don't display this table
+    if not rows:
+        return None
+
+    # 2. Border color (always green - this is informational only)
+    border_color = "green"
+
+    # 3. Create and populate table
+    table = Table(title="Onboard LEDs", box=box.ROUNDED, show_header=True, expand=True, border_style=border_color)
+    table.add_column("LED", style="cyan")
     table.add_column("Status", style="bold")
 
     for row in rows:
@@ -694,6 +848,7 @@ def main():
             check_firmware_updates(board_model),
             check_temperatures_and_power(board_model),
             check_sd_card(),
+            check_led_status(),
         ]
 
         # Only check btrfs if it's mounted
