@@ -124,21 +124,27 @@ def check_reboot_status():
     running_kernel = run_command("uname -r")
     if running_kernel:
         running_kernel = running_kernel.strip()
-        # Check what kernel versions are installed
-        installed_kernels = run_command("dpkg -l | grep -E 'linux-image-[0-9]' | grep '^ii' | awk '{print $2}' | sed 's/linux-image-//'")
+        # Check what kernel versions are installed (use sort -V for proper version sorting)
+        installed_kernels = run_command("dpkg -l | grep -E 'linux-image-[0-9]' | grep '^ii' | awk '{print $2}' | sed 's/linux-image-//' | sort -V")
         if installed_kernels:
             installed_list = [k.strip() for k in installed_kernels.split('\n') if k.strip()]
-            # Find the newest installed kernel (last in sorted list)
+            # Find the newest installed kernel (last in version-sorted list)
             if installed_list:
-                installed_list.sort()
                 newest_kernel = installed_list[-1]
+                # Only warn if the installed kernel is NEWER than the running one
+                # (handles custom kernels that may be ahead of packaged versions)
                 if newest_kernel != running_kernel:
-                    reboot_required = True
-                    status_level = max(status_level, 1)
-                    reasons.append(f"Kernel updated: {running_kernel} → {newest_kernel}")
+                    # Use sort -V to compare: if running kernel sorts last, it's newer/equal
+                    version_check = run_command(f"printf '%s\\n%s' '{running_kernel}' '{newest_kernel}' | sort -V | tail -1")
+                    if version_check and version_check.strip() == newest_kernel:
+                        # Installed kernel is newer - reboot needed
+                        reboot_required = True
+                        status_level = max(status_level, 1)
+                        reasons.append(f"Kernel updated: {running_kernel} → {newest_kernel}")
 
     # Check 3: Services using deleted libraries (needs restart or reboot)
-    deleted_libs = run_command("sudo lsof +c 0 2>/dev/null | grep -E '\\(deleted\\)' | awk '{print $1}' | sort -u")
+    # Only flag actual shared libraries (.so files), not memfd or temp files
+    deleted_libs = run_command("sudo lsof +c 0 2>/dev/null | grep -E '\\.so.*\\(deleted\\)' | awk '{print $1}' | sort -u")
     if deleted_libs and deleted_libs.strip():
         services = [s.strip() for s in deleted_libs.split('\n') if s.strip() and s.strip() not in ['systemd', 'systemd-journal']]
         if services:
