@@ -36,6 +36,7 @@ from rich.text import Text
 
 # Configuration
 BTRFS_MOUNT_PATH = "/tank"
+__version__ = "0.4.0"
 
 console = Console()
 
@@ -898,12 +899,415 @@ def check_system_info(board_model="Unknown"):
     return table
 
 
+# =============================================================================
+# JSON Output Functions (for Ansible/automation)
+# =============================================================================
+
+def gather_system_info_data(board_model="Unknown"):
+    """Gather system information as a dictionary."""
+    data = {}
+
+    device_model = run_command("cat /proc/device-tree/model")
+    if device_model:
+        data["device"] = device_model.strip()
+
+    hostname = run_command("hostname")
+    if hostname:
+        data["hostname"] = hostname
+
+    # OS Detection
+    ubuntu_version = run_command("lsb_release -sd 2>/dev/null")
+    if ubuntu_version and "Ubuntu" in ubuntu_version:
+        data["os"] = ubuntu_version.strip('"')
+    else:
+        pi_os_date = run_command("grep -oP 'Raspberry Pi reference \\K\\d{4}-\\d{2}-\\d{2}' /etc/rpi-issue")
+        if pi_os_date:
+            data["os"] = f"Raspberry Pi OS ({pi_os_date})"
+            debian_version = run_command("cat /etc/debian_version")
+            if debian_version:
+                data["debian_version"] = debian_version
+        else:
+            os_name = run_command("cat /etc/os-release | grep '^PRETTY_NAME=' | cut -d'=' -f2")
+            if os_name:
+                data["os"] = os_name.strip('"')
+
+    uptime = run_command("uptime -p")
+    if uptime:
+        data["uptime"] = uptime.replace("up ", "")
+
+    load = run_command("cat /proc/loadavg | cut -d' ' -f1-3")
+    if load:
+        data["load_average"] = load
+
+    mem = run_command("free -h | grep Mem | awk '{print $3 \"/\" $2}'")
+    if mem:
+        data["memory_used"] = mem
+
+    kernel = run_command("uname -r")
+    if kernel:
+        data["kernel"] = kernel
+
+    cpu_count = run_command("nproc")
+    if cpu_count:
+        data["cpu_cores"] = int(cpu_count)
+
+    data["board_model"] = board_model
+
+    return data
+
+
+def gather_reboot_data():
+    """Gather reboot status as a dictionary."""
+    data = {
+        "status": "ok",
+        "reboot_required": False,
+        "reasons": []
+    }
+
+    # Check 1: /var/run/reboot-required
+    if os.path.exists("/var/run/reboot-required"):
+        data["reboot_required"] = True
+        data["status"] = "warning"
+
+        packages = []
+        if os.path.exists("/var/run/reboot-required.pkgs"):
+            try:
+                with open("/var/run/reboot-required.pkgs", "r") as f:
+                    packages = [pkg.strip() for pkg in f.readlines() if pkg.strip()]
+            except:
+                pass
+
+        if packages:
+            data["reasons"].append({"type": "packages", "packages": packages})
+        else:
+            data["reasons"].append({"type": "packages", "packages": []})
+
+    # Check 2: Kernel version mismatch
+    running_kernel = run_command("uname -r")
+    if running_kernel:
+        running_kernel = running_kernel.strip()
+        installed_kernels = run_command("dpkg -l | grep -E 'linux-image-[0-9]' | grep '^ii' | awk '{print $2}' | sed 's/linux-image-//' | sort -V")
+        if installed_kernels:
+            installed_list = [k.strip() for k in installed_kernels.split('\n') if k.strip()]
+            if installed_list:
+                newest_kernel = installed_list[-1]
+                if newest_kernel != running_kernel:
+                    version_check = run_command(f"printf '%s\\n%s' '{running_kernel}' '{newest_kernel}' | sort -V | tail -1")
+                    if version_check and version_check.strip() == newest_kernel:
+                        data["reboot_required"] = True
+                        data["status"] = "warning"
+                        data["reasons"].append({
+                            "type": "kernel",
+                            "running": running_kernel,
+                            "installed": newest_kernel
+                        })
+
+    return data
+
+
+def gather_temperature_data(board_model="Unknown"):
+    """Gather temperature, fan, and power data as a dictionary."""
+    data = {
+        "status": "ok",
+        "cpu_temp_c": None,
+        "fan_speed": None,
+        "power": None,
+        "throttle_flags": []
+    }
+
+    # CPU temperature
+    cpu_temp_val = None
+    if board_model.startswith("Pi"):
+        cpu_temp_out = run_command("vcgencmd measure_temp")
+        if cpu_temp_out:
+            temp_match = re.search(r"temp=([\d.]+)'C", cpu_temp_out)
+            if temp_match:
+                cpu_temp_val = float(temp_match.group(1))
+
+    if cpu_temp_val is None:
+        temp_sysfs = run_command("cat /sys/class/thermal/thermal_zone0/temp")
+        if temp_sysfs and temp_sysfs.isdigit():
+            cpu_temp_val = float(temp_sysfs) / 1000.0
+
+    if cpu_temp_val is not None:
+        data["cpu_temp_c"] = round(cpu_temp_val, 1)
+        if cpu_temp_val >= 75:
+            data["status"] = "fail"
+        elif cpu_temp_val >= 60:
+            data["status"] = "warning"
+
+    # Fan status
+    if board_model == "Pi 5":
+        fan_state = run_command("cat /sys/class/thermal/cooling_device0/cur_state")
+        if fan_state:
+            fan_labels = {0: "off", 1: "low", 2: "medium"}
+            data["fan_speed"] = fan_labels.get(int(fan_state), "high")
+    elif board_model == "Rock5c":
+        fan_state = run_command("cat /sys/class/thermal/cooling_device4/cur_state")
+        if fan_state:
+            try:
+                state = int(fan_state)
+                fan_labels = {0: "off", 1: "low", 2: "medium", 3: "high", 4: "max"}
+                data["fan_speed"] = fan_labels.get(state, f"state_{state}")
+            except ValueError:
+                pass
+
+    # Power/throttle status (Pi only)
+    if board_model.startswith("Pi"):
+        throttled_out = run_command("vcgencmd get_throttled")
+        if throttled_out and 'throttled=' in throttled_out:
+            try:
+                val = int(throttled_out.split('=')[1], 16)
+                data["throttle_raw"] = hex(val)
+                if val == 0:
+                    data["power"] = "ok"
+                else:
+                    data["power"] = "throttled"
+                    data["status"] = "fail"
+                    if val & 0x1: data["throttle_flags"].append("under_voltage_now")
+                    if val & 0x10000: data["throttle_flags"].append("under_voltage_occurred")
+                    if val & 0x4: data["throttle_flags"].append("throttled_now")
+                    if val & 0x40000: data["throttle_flags"].append("throttled_occurred")
+                    if val & 0x2: data["throttle_flags"].append("freq_capped_now")
+                    if val & 0x20000: data["throttle_flags"].append("freq_capped_occurred")
+                    if val & 0x8: data["throttle_flags"].append("soft_temp_limit_now")
+                    if val & 0x80000: data["throttle_flags"].append("soft_temp_limit_occurred")
+            except (ValueError, IndexError):
+                data["power"] = "unknown"
+
+    return data
+
+
+def gather_firmware_data(board_model="Unknown"):
+    """Gather firmware/EEPROM data as a dictionary."""
+    if not board_model.startswith("Pi"):
+        return None
+
+    data = {
+        "status": "ok",
+        "current": None,
+        "latest": None,
+        "update_available": False
+    }
+
+    update_info = run_command("sudo rpi-eeprom-update")
+    if not update_info:
+        data["status"] = "fail"
+        return data
+
+    if "update available" in update_info:
+        data["status"] = "warning"
+        data["update_available"] = True
+    elif "up to date" not in update_info:
+        data["status"] = "unknown"
+
+    for line in update_info.split('\n'):
+        stripped_line = line.strip()
+        if stripped_line.startswith("CURRENT:"):
+            data["current"] = stripped_line.split(':', 1)[1].strip()
+        elif stripped_line.startswith("LATEST:"):
+            data["latest"] = stripped_line.split(':', 1)[1].strip()
+
+    return data
+
+
+def gather_storage_data(board_model="Unknown", nvme_drives=None, has_btrfs=False):
+    """Gather storage health data as a dictionary."""
+    data = {
+        "status": "ok",
+        "boot_drive": {},
+        "nvme": [],
+        "btrfs": None
+    }
+
+    # Boot drive (SD/eMMC)
+    root_device = run_command("df / | tail -n 1 | awk '{print $1}'")
+    mmcblk_device = None
+    if root_device:
+        match = re.search(r'(mmcblk\d+)', root_device)
+        if match:
+            mmcblk_device = match.group(1)
+
+    if not mmcblk_device:
+        mmcblk_device = "mmcblk0"
+
+    device_type_raw = run_command(f"cat /sys/block/{mmcblk_device}/device/type")
+    is_emmc = device_type_raw == "MMC" if device_type_raw else False
+
+    boot = data["boot_drive"]
+    boot["device"] = mmcblk_device
+    boot["type"] = "emmc" if is_emmc else "microsd"
+    boot["status"] = "ok"
+
+    card_name = run_command(f"cat /sys/block/{mmcblk_device}/device/name")
+    card_date = run_command(f"cat /sys/block/{mmcblk_device}/device/date")
+    if card_name:
+        boot["model"] = card_name
+    if card_date:
+        boot["manufacture_date"] = card_date
+
+    # Disk usage
+    disk_usage_out = run_command("df -h / | tail -n 1 | awk '{print $5}'")
+    if disk_usage_out and '%' in disk_usage_out:
+        usage_percent = int(disk_usage_out.replace('%', ''))
+        boot["usage_percent"] = usage_percent
+        if usage_percent > 95:
+            boot["status"] = "fail"
+            data["status"] = "fail"
+        elif usage_percent > 85:
+            boot["status"] = "warning"
+            if data["status"] == "ok":
+                data["status"] = "warning"
+
+    # Kernel errors
+    errors_out = run_command(f"sudo dmesg | grep -i '{mmcblk_device}.*error' | wc -l")
+    if errors_out:
+        error_count = int(errors_out)
+        boot["kernel_errors"] = error_count
+        if error_count > 0:
+            boot["status"] = "fail"
+            data["status"] = "fail"
+
+    # NVMe drives
+    if nvme_drives:
+        for drive in nvme_drives:
+            nvme_data = {
+                "device": drive.split('/')[-1],
+                "status": "ok"
+            }
+            smart_json = run_command(f"sudo smartctl -aj {drive}")
+            if smart_json:
+                try:
+                    smart = json.loads(smart_json)
+                    nvme_data["model"] = smart.get("model_name", "Unknown")
+                    health = smart.get("smart_status", {}).get("passed", False)
+                    nvme_data["smart_passed"] = health
+                    if not health:
+                        nvme_data["status"] = "fail"
+                        data["status"] = "fail"
+
+                    temp = smart.get("temperature", {}).get("current")
+                    if temp:
+                        nvme_data["temp_c"] = temp
+
+                    wear = smart.get("nvme_smart_health_information_log", {}).get("percentage_used")
+                    if wear is not None:
+                        nvme_data["wear_percent"] = wear
+                except json.JSONDecodeError:
+                    nvme_data["status"] = "fail"
+                    data["status"] = "fail"
+            else:
+                nvme_data["status"] = "fail"
+                data["status"] = "fail"
+
+            data["nvme"].append(nvme_data)
+
+    # btrfs
+    if has_btrfs:
+        btrfs = {
+            "mount_path": BTRFS_MOUNT_PATH,
+            "status": "ok"
+        }
+
+        # Device errors
+        stats_out = run_command(f"sudo btrfs device stats {BTRFS_MOUNT_PATH}")
+        if stats_out:
+            error_count = 0
+            for line in stats_out.split('\n'):
+                if 'errs' in line and not line.strip().endswith('0'):
+                    error_count += 1
+            btrfs["device_errors"] = error_count
+            if error_count > 0:
+                btrfs["status"] = "fail"
+                data["status"] = "fail"
+
+        # Device count
+        fs_show_out = run_command(f"sudo btrfs filesystem show {BTRFS_MOUNT_PATH}")
+        if fs_show_out:
+            devices = len([l for l in fs_show_out.split('\n') if 'devid' in l])
+            btrfs["device_count"] = devices
+
+        # Scrub status
+        scrub_out = run_command(f"sudo btrfs scrub status {BTRFS_MOUNT_PATH}")
+        if scrub_out:
+            if "never run" in scrub_out.lower():
+                btrfs["last_scrub"] = "never"
+                btrfs["status"] = "warning"
+                if data["status"] == "ok":
+                    data["status"] = "warning"
+            elif "running" in scrub_out.lower():
+                btrfs["last_scrub"] = "running"
+            elif "finished" in scrub_out.lower():
+                btrfs["last_scrub"] = "completed"
+                for line in scrub_out.split('\n'):
+                    if 'Error summary:' in line:
+                        error_summary = line.split(':', 1)[1].strip()
+                        btrfs["scrub_errors"] = error_summary
+                        if error_summary != "no errors found":
+                            btrfs["status"] = "fail"
+                            data["status"] = "fail"
+
+        data["btrfs"] = btrfs
+
+    return data
+
+
+def run_json_checks():
+    """Run all health checks and return structured JSON data."""
+    # Detect hardware
+    board_model = detect_board_model()
+    nvme_drives = detect_nvme_drives()
+    has_btrfs = detect_btrfs()
+
+    # Gather all data
+    system_info = gather_system_info_data(board_model)
+    reboot = gather_reboot_data()
+    temperature = gather_temperature_data(board_model)
+    firmware = gather_firmware_data(board_model)
+    storage = gather_storage_data(board_model, nvme_drives, has_btrfs)
+
+    # Determine overall status
+    statuses = [
+        reboot["status"],
+        temperature["status"],
+        storage["status"]
+    ]
+    if firmware:
+        statuses.append(firmware["status"])
+
+    if "fail" in statuses:
+        overall_status = "fail"
+    elif "warning" in statuses:
+        overall_status = "warning"
+    else:
+        overall_status = "ok"
+
+    # Build output
+    output = {
+        "version": __version__,
+        "timestamp": datetime.now().isoformat(),
+        "status": overall_status,
+        "privileged": os.geteuid() == 0,
+        "system": system_info,
+        "checks": {
+            "reboot": reboot,
+            "temperature": temperature,
+            "storage": storage
+        }
+    }
+
+    if firmware:
+        output["checks"]["firmware"] = firmware
+
+    return output
+
+
 def main():
     """Main health check routine for SBC systems"""
     console.clear()
 
     # Header
-    title = Text("System Health Check", style="bold white on blue", justify="center")
+    title = Text(f"Pi Health Check v{__version__}", style="bold white on navy_blue", justify="center")
     privilege = "(privileged)" if os.geteuid() == 0 else "(unprivileged)"
     timestamp = Text(f"Scan Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {privilege}", style="dim", justify="center")
 
@@ -981,6 +1385,49 @@ def main():
 
 
 if __name__ == "__main__":
+    import sys
+
+    # Handle command-line arguments
+    if len(sys.argv) > 1:
+        arg = sys.argv[1]
+        if arg in ("--version", "-v"):
+            print(f"pi-health-check {__version__}")
+            sys.exit(0)
+        elif arg == "--json":
+            try:
+                result = run_json_checks()
+                print(json.dumps(result, indent=2))
+                # Exit code based on status
+                if result["status"] == "fail":
+                    sys.exit(2)
+                elif result["status"] == "warning":
+                    sys.exit(1)
+                sys.exit(0)
+            except Exception as e:
+                error_output = {
+                    "version": __version__,
+                    "status": "error",
+                    "error": str(e)
+                }
+                print(json.dumps(error_output, indent=2))
+                sys.exit(3)
+        elif arg in ("--help", "-h"):
+            print(f"pi-health-check {__version__}")
+            print()
+            print("Usage: pi-health-check [OPTIONS]")
+            print()
+            print("Options:")
+            print("  --json      Output results as JSON (for automation)")
+            print("  --version   Show version and exit")
+            print("  --help      Show this help and exit")
+            print()
+            print("Exit codes (--json mode):")
+            print("  0  All checks passed")
+            print("  1  Warnings detected")
+            print("  2  Failures detected")
+            print("  3  Error running checks")
+            sys.exit(0)
+
     try:
         main()
     except KeyboardInterrupt:
