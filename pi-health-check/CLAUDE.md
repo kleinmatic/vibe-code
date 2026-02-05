@@ -46,7 +46,7 @@ pyinstaller --onefile --name pi-health-check pi-health-check.py
 Btrfs mount path and version are at top of script:
 ```python
 BTRFS_MOUNT_PATH = "/tank"  # Line 38
-__version__ = "0.4.0"       # Line 39
+__version__ = "0.5.1"       # Line 39
 ```
 
 ## Key Architecture
@@ -55,8 +55,8 @@ __version__ = "0.4.0"       # Line 39
 
 **Main components**:
 - Board detection: Pi 3/4/5, Rock5c support
-- Health checks: Temperature, power, storage, firmware
-- Conditional checks: NVMe, btrfs, fan (Pi 5 only)
+- Health checks: Temperature, throttle/voltage, storage, firmware
+- Conditional checks: NVMe, btrfs, fan (Pi 5 only), throttle (Pi only)
 - TUI rendering: Rich library for terminal output
 - JSON output: Structured data for automation
 
@@ -77,10 +77,11 @@ __version__ = "0.4.0"       # Line 39
 
 ```json
 {
-  "version": "0.4.0",
+  "version": "0.5.1",
   "timestamp": "2026-02-01T15:13:22.392731",
   "status": "ok|warning|fail",
   "privileged": true,
+  "throttled": { "raw": "0x0", "status": "ok" },
   "system": {
     "device": "Raspberry Pi 5 Model B Rev 1.1",
     "hostname": "pihost",
@@ -91,12 +92,25 @@ __version__ = "0.4.0"       # Line 39
   },
   "checks": {
     "reboot": { "status": "ok", "reboot_required": false, ... },
-    "temperature": { "status": "ok", "cpu_temp_c": 49.4, ... },
+    "temperature": { "status": "ok", "cpu_temp_c": 49.4, "fan_speed": "off" },
+    "throttle": {
+      "status": "ok|warning|fail",
+      "throttle_raw": "0x0",
+      "current_flags": [],
+      "occurred_flags": []
+    },
     "storage": { "status": "ok", "boot_drive": {...}, "nvme": [...], "btrfs": {...} },
     "firmware": { "status": "ok", "update_available": false, ... }
   }
 }
 ```
+
+**Throttle check notes (Pi only):**
+- Top-level `throttled` summary: `{"raw": "0x0", "status": "ok"}` for quick Ansible checks
+- `current_flags`: Active issues right now (under_voltage, freq_capped, throttled, soft_temp_limit)
+- `occurred_flags`: Issues that occurred since boot but may have resolved
+- Status: `fail` if current issues, `warning` if only historical, `ok` if none
+- `null` on non-Pi boards (Rock5c, etc.)
 
 ## Ansible Integration
 
@@ -148,7 +162,7 @@ Example playbook for fleet health monitoring:
 
 1. **Ubuntu vcgencmd issue**: On Ubuntu Server, vcgencmd needs `/dev/vcio` access
    - Falls back to sysfs for temperature if vcgencmd unavailable
-   - Power/throttling shows UNKNOWN without sudo on Ubuntu
+   - Throttle check shows UNKNOWN without vcgencmd access
 
 2. **Reboot detection sensitivity**: Multiple methods used to avoid false positives
    - Checks /var/run/reboot-required (Debian/Ubuntu)
@@ -156,14 +170,16 @@ Example playbook for fleet health monitoring:
    - LED state detection for some boards
 
 3. **Platform-specific behavior**:
+   - Pi 3/4/5: Includes throttle/voltage check (vcgencmd get_throttled)
    - Pi 5: Includes fan speed check
-   - Rock5c: Different LED paths and detection methods
+   - Rock5c: Different LED paths, no throttle check (vcgencmd unavailable)
    - Older Pis: Skip fan checks
 
 4. **JSON vs TUI code paths**: Keep both in sync when adding new checks
    - TUI: Add `check_*()` function returning Table
    - JSON: Add `gather_*_data()` function returning dict
    - Update `run_json_checks()` to include new data
+   - **IMPORTANT**: When JSON output structure changes, remind user to update Ansible playbooks that consume this data
 
 ## Testing
 

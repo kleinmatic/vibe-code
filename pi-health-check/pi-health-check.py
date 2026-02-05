@@ -36,7 +36,7 @@ from rich.text import Text
 
 # Configuration
 BTRFS_MOUNT_PATH = "/tank"
-__version__ = "0.4.0"
+__version__ = "0.5.1"
 
 console = Console()
 
@@ -403,8 +403,8 @@ def check_nvme_health(drives=None):
     return table
 
 
-def check_temperatures_and_power(board_model="Unknown"):
-    """Check system temperatures, fan, and power status"""
+def check_temperatures_and_cooling(board_model="Unknown"):
+    """Check system temperatures and fan status"""
     # 1. Gather data and determine status level
     status_level = 0  # 0=OK, 1=WARN, 2=FAIL
 
@@ -460,41 +460,6 @@ def check_temperatures_and_power(board_model="Unknown"):
             except ValueError:
                 fan_label = "Unknown"
 
-    # Power status data (Pi only - uses vcgencmd)
-    power_value = "N/A"
-    power_status_text = "[yellow]⚠ UNKNOWN[/yellow]"
-
-    if board_model.startswith("Pi"):
-        # Try to get throttle status (Raspberry Pi only)
-        throttled_out = run_command("vcgencmd get_throttled")
-
-        if throttled_out and 'throttled=' in throttled_out:
-            try:
-                val = int(throttled_out.split('=')[1], 16)
-                if val == 0:
-                    power_value = "Normal"
-                    power_status_text = "[green]✓ OK[/green]"
-                else:
-                    status_level = max(status_level, 2)
-                    power_value = "Problems Detected"
-                    power_details_list = []
-                    if val & 0x1: power_details_list.append("Under-voltage now")
-                    if val & 0x10000: power_details_list.append("Under-voltage occurred")
-                    if val & 0x4: power_details_list.append("Currently throttled")
-                    if val & 0x40000: power_details_list.append("Throttling has occurred")
-                    if val & 0x2: power_details_list.append("ARM frequency capped now")
-                    if val & 0x20000: power_details_list.append("ARM frequency capping occurred")
-                    if val & 0x8: power_details_list.append("Soft temperature limit active")
-                    if val & 0x80000: power_details_list.append("Soft temperature limit occurred")
-                    power_details = ", ".join(power_details_list)
-                    power_status_text = f"[red]✗ FAIL[/red]\n{power_details}"
-            except (ValueError, IndexError):
-                pass  # Keep unknown status
-    else:
-        # For non-Pi boards, power monitoring is not available via vcgencmd
-        power_value = "Not available"
-        power_status_text = "[dim]—[/dim]"
-
     # 2. Determine border color
     border_color = "green"
     if status_level == 2:
@@ -503,7 +468,7 @@ def check_temperatures_and_power(board_model="Unknown"):
         border_color = "yellow"
 
     # 3. Create and populate table
-    table = Table(title="Temperature, Cooling & Power", box=box.ROUNDED, show_header=True, expand=True, border_style=border_color)
+    table = Table(title="Temperature & Cooling", box=box.ROUNDED, show_header=True, expand=True, border_style=border_color)
     table.add_column("Item", style="cyan")
     table.add_column("Value")
     table.add_column("Status", style="bold")
@@ -512,9 +477,114 @@ def check_temperatures_and_power(board_model="Unknown"):
     # Only show fan status if available
     if fan_label is not None:
         table.add_row("Fan Speed", fan_label, "[green]✓ OK[/green]")
-    # Only show power status if not "Not available"
-    if power_value != "Not available":
-        table.add_row("Power", power_value, power_status_text)
+
+    return table
+
+
+def check_throttle_status(board_model="Unknown"):
+    """Check power/voltage throttling status (Raspberry Pi only).
+
+    Uses vcgencmd get_throttled which returns a bitmask:
+    Current state (bits 0-3):
+      Bit 0: Under-voltage detected
+      Bit 1: ARM frequency capped
+      Bit 2: Currently throttled
+      Bit 3: Soft temperature limit active
+    Historical state (bits 16-19):
+      Bit 16: Under-voltage has occurred
+      Bit 17: ARM frequency capping has occurred
+      Bit 18: Throttling has occurred
+      Bit 19: Soft temperature limit has occurred
+    """
+    # Only available on Raspberry Pi
+    if not board_model.startswith("Pi"):
+        return None
+
+    status_level = 0  # 0=OK, 1=WARN, 2=FAIL
+    rows = []
+
+    throttled_out = run_command("vcgencmd get_throttled")
+
+    if not throttled_out or 'throttled=' not in throttled_out:
+        # vcgencmd not available or failed
+        table = Table(title="Power & Voltage", box=box.ROUNDED, show_header=True, expand=True, border_style="yellow")
+        table.add_column("Check", style="cyan")
+        table.add_column("Status", style="bold")
+        table.add_row("Throttle Status", "[yellow]⚠ UNKNOWN[/yellow] (vcgencmd unavailable)")
+        return table
+
+    try:
+        val = int(throttled_out.split('=')[1], 16)
+    except (ValueError, IndexError):
+        table = Table(title="Power & Voltage", box=box.ROUNDED, show_header=True, expand=True, border_style="yellow")
+        table.add_column("Check", style="cyan")
+        table.add_column("Status", style="bold")
+        table.add_row("Throttle Status", "[yellow]⚠ PARSE ERROR[/yellow]")
+        return table
+
+    # Check current state (bits 0-3) - these are active problems
+    current_issues = []
+    if val & 0x1:
+        current_issues.append("Under-voltage")
+    if val & 0x2:
+        current_issues.append("Frequency capped")
+    if val & 0x4:
+        current_issues.append("Throttled")
+    if val & 0x8:
+        current_issues.append("Soft temp limit")
+
+    # Check historical state (bits 16-19) - problems that occurred since boot
+    historical_issues = []
+    if val & 0x10000:
+        historical_issues.append("Under-voltage")
+    if val & 0x20000:
+        historical_issues.append("Frequency capped")
+    if val & 0x40000:
+        historical_issues.append("Throttled")
+    if val & 0x80000:
+        historical_issues.append("Soft temp limit")
+
+    # Build rows and determine status
+    if val == 0:
+        # All clear
+        rows.append(("Current Status", "No issues", "[green]✓ OK[/green]"))
+        rows.append(("Since Boot", "No issues", "[green]✓ OK[/green]"))
+    else:
+        # Current issues
+        if current_issues:
+            status_level = 2  # FAIL - active problem
+            rows.append(("Current Status", ", ".join(current_issues), "[red]✗ ACTIVE[/red]"))
+        else:
+            rows.append(("Current Status", "No issues", "[green]✓ OK[/green]"))
+
+        # Historical issues (only interesting if different from current)
+        if historical_issues:
+            if not current_issues:
+                # Had issues but resolved now - warning
+                status_level = max(status_level, 1)
+                rows.append(("Since Boot", ", ".join(historical_issues), "[yellow]⚠ OCCURRED[/yellow]"))
+            else:
+                # Issues still active, show history
+                rows.append(("Since Boot", ", ".join(historical_issues), "[red]⚠ OCCURRED[/red]"))
+
+    # Add raw value for debugging
+    rows.append(("Raw Value", f"0x{val:X}", "[dim]—[/dim]"))
+
+    # Determine border color
+    border_color = "green"
+    if status_level == 2:
+        border_color = "red"
+    elif status_level == 1:
+        border_color = "yellow"
+
+    # Create table
+    table = Table(title="Power & Voltage", box=box.ROUNDED, show_header=True, expand=True, border_style=border_color)
+    table.add_column("Check", style="cyan")
+    table.add_column("Details")
+    table.add_column("Status", style="bold")
+
+    for row in rows:
+        table.add_row(*row)
 
     return table
 
@@ -1006,13 +1076,11 @@ def gather_reboot_data():
 
 
 def gather_temperature_data(board_model="Unknown"):
-    """Gather temperature, fan, and power data as a dictionary."""
+    """Gather temperature and fan data as a dictionary."""
     data = {
         "status": "ok",
         "cpu_temp_c": None,
-        "fan_speed": None,
-        "power": None,
-        "throttle_flags": []
+        "fan_speed": None
     }
 
     # CPU temperature
@@ -1052,28 +1120,61 @@ def gather_temperature_data(board_model="Unknown"):
             except ValueError:
                 pass
 
-    # Power/throttle status (Pi only)
-    if board_model.startswith("Pi"):
-        throttled_out = run_command("vcgencmd get_throttled")
-        if throttled_out and 'throttled=' in throttled_out:
-            try:
-                val = int(throttled_out.split('=')[1], 16)
-                data["throttle_raw"] = hex(val)
-                if val == 0:
-                    data["power"] = "ok"
-                else:
-                    data["power"] = "throttled"
-                    data["status"] = "fail"
-                    if val & 0x1: data["throttle_flags"].append("under_voltage_now")
-                    if val & 0x10000: data["throttle_flags"].append("under_voltage_occurred")
-                    if val & 0x4: data["throttle_flags"].append("throttled_now")
-                    if val & 0x40000: data["throttle_flags"].append("throttled_occurred")
-                    if val & 0x2: data["throttle_flags"].append("freq_capped_now")
-                    if val & 0x20000: data["throttle_flags"].append("freq_capped_occurred")
-                    if val & 0x8: data["throttle_flags"].append("soft_temp_limit_now")
-                    if val & 0x80000: data["throttle_flags"].append("soft_temp_limit_occurred")
-            except (ValueError, IndexError):
-                data["power"] = "unknown"
+    return data
+
+
+def gather_throttle_data(board_model="Unknown"):
+    """Gather power/voltage throttle data as a dictionary (Raspberry Pi only)."""
+    if not board_model.startswith("Pi"):
+        return None
+
+    data = {
+        "status": "ok",
+        "throttle_raw": "0x0",
+        "current_flags": [],
+        "occurred_flags": []
+    }
+
+    throttled_out = run_command("vcgencmd get_throttled")
+    if not throttled_out or 'throttled=' not in throttled_out:
+        data["status"] = "unknown"
+        return data
+
+    try:
+        val = int(throttled_out.split('=')[1], 16)
+        data["throttle_raw"] = hex(val)
+
+        if val == 0:
+            data["status"] = "ok"
+        else:
+            # Check current state (bits 0-3)
+            if val & 0x1:
+                data["current_flags"].append("under_voltage")
+            if val & 0x2:
+                data["current_flags"].append("freq_capped")
+            if val & 0x4:
+                data["current_flags"].append("throttled")
+            if val & 0x8:
+                data["current_flags"].append("soft_temp_limit")
+
+            # Check historical state (bits 16-19)
+            if val & 0x10000:
+                data["occurred_flags"].append("under_voltage")
+            if val & 0x20000:
+                data["occurred_flags"].append("freq_capped")
+            if val & 0x40000:
+                data["occurred_flags"].append("throttled")
+            if val & 0x80000:
+                data["occurred_flags"].append("soft_temp_limit")
+
+            # Set status based on current vs historical
+            if data["current_flags"]:
+                data["status"] = "fail"  # Active problem
+            elif data["occurred_flags"]:
+                data["status"] = "warning"  # Had problem, now resolved
+
+    except (ValueError, IndexError):
+        data["status"] = "unknown"
 
     return data
 
@@ -1263,6 +1364,7 @@ def run_json_checks():
     system_info = gather_system_info_data(board_model)
     reboot = gather_reboot_data()
     temperature = gather_temperature_data(board_model)
+    throttle = gather_throttle_data(board_model)
     firmware = gather_firmware_data(board_model)
     storage = gather_storage_data(board_model, nvme_drives, has_btrfs)
 
@@ -1272,6 +1374,8 @@ def run_json_checks():
         temperature["status"],
         storage["status"]
     ]
+    if throttle:
+        statuses.append(throttle["status"])
     if firmware:
         statuses.append(firmware["status"])
 
@@ -1288,6 +1392,10 @@ def run_json_checks():
         "timestamp": datetime.now().isoformat(),
         "status": overall_status,
         "privileged": os.geteuid() == 0,
+        "throttled": {
+            "raw": throttle["throttle_raw"],
+            "status": throttle["status"]
+        } if throttle else None,
         "system": system_info,
         "checks": {
             "reboot": reboot,
@@ -1296,6 +1404,8 @@ def run_json_checks():
         }
     }
 
+    if throttle:
+        output["checks"]["throttle"] = throttle
     if firmware:
         output["checks"]["firmware"] = firmware
 
@@ -1327,7 +1437,8 @@ def main():
             check_reboot_status(),
             check_system_info(board_model),
             check_firmware_updates(board_model),
-            check_temperatures_and_power(board_model),
+            check_temperatures_and_cooling(board_model),
+            check_throttle_status(board_model),
             check_sd_card(),
             check_led_status(),
         ]
