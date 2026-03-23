@@ -102,6 +102,11 @@ show_help() {
     echo
 }
 
+if [[ ! -d "$LED_BASE" ]]; then
+    echo "Error: $LED_BASE not found. This tool requires a Linux system with LED sysfs support."
+    exit 1
+fi
+
 if [[ -z "$1" ]] || [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
     show_help
     exit 0
