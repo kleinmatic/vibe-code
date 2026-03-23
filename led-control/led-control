@@ -1,0 +1,175 @@
+#!/bin/bash
+# Control onboard LEDs on any SBC with /sys/class/leds support
+# Supports setting triggers and persisting across reboots
+
+LED_BASE="/sys/class/leds"
+CONFIG_DIR="/etc/default"
+SERVICE_NAME="led-defaults"
+SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
+
+is_installed() {
+    [[ -f "$SERVICE_PATH" ]] && systemctl is-enabled "$SERVICE_NAME" &>/dev/null
+}
+
+do_install() {
+    sudo tee "$SERVICE_PATH" > /dev/null <<'UNIT'
+[Unit]
+Description=Restore LED settings on boot
+After=sysinit.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c '\
+  for cfg in /etc/default/led-*; do \
+    [ -f "$cfg" ] || continue; \
+    case "$cfg" in *.interface) continue;; esac; \
+    led=$(basename "$cfg" | sed "s/^led-//;s/-/:/g"); \
+    trigger=$(cat "$cfg"); \
+    echo "$trigger" > /sys/class/leds/$led/trigger; \
+    if [ "$trigger" = "netdev" ] && [ -f "$cfg.interface" ]; then \
+      iface=$(cat "$cfg.interface"); \
+      echo "$iface" > /sys/class/leds/$led/device_name; \
+    fi; \
+  done'
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    sudo systemctl daemon-reload
+    sudo systemctl enable "$SERVICE_NAME"
+    echo "Installed and enabled $SERVICE_NAME.service"
+    echo "LED settings in $CONFIG_DIR/led-* will be restored on boot."
+}
+
+do_uninstall() {
+    sudo systemctl disable "$SERVICE_NAME" 2>/dev/null
+    sudo rm -f "$SERVICE_PATH"
+    sudo systemctl daemon-reload
+    echo "Uninstalled $SERVICE_NAME.service"
+    echo "LED config files in $CONFIG_DIR/led-* are still present."
+}
+
+list_leds() {
+    shopt -s nullglob
+    local leds=("$LED_BASE"/*)
+    shopt -u nullglob
+    if [[ ${#leds[@]} -eq 0 ]]; then
+        echo "No LEDs found in $LED_BASE"
+        exit 1
+    fi
+    for led in "${leds[@]}"; do
+        local name=$(basename "$led")
+        local current=$(grep -o '\[.*\]' "$led/trigger" | tr -d '[]')
+        printf "  %-30s %s\n" "$name" "$current"
+    done
+}
+
+list_triggers() {
+    local led_path="$LED_BASE/$1/trigger"
+    if [[ ! -f "$led_path" ]]; then
+        echo "LED '$1' not found"
+        exit 1
+    fi
+    tr ' ' '\n' < "$led_path" | sed 's/\[//;s/\]//' | sort
+}
+
+show_help() {
+    echo "Usage: $0 <command> | <led> [mode] [interface]"
+    echo
+    echo "Commands:"
+    echo "  $0 list                  - Show all LEDs and current modes"
+    echo "  $0 triggers <led>        - Show available triggers for an LED"
+    echo "  $0 <led> <mode>          - Set LED mode"
+    echo "  $0 <led> netdev <iface>  - Set LED to network activity on interface"
+    echo "  $0 install               - Install systemd service to persist settings across reboots"
+    echo "  $0 uninstall             - Remove systemd service"
+    echo
+    echo "Common modes:"
+    echo "  none          - LED off"
+    echo "  default-on    - Steady on"
+    echo "  heartbeat     - Blinks with CPU activity"
+    echo "  timer         - Configurable blink pattern"
+    echo "  cpu           - Any CPU activity"
+    echo "  mmc0          - Primary storage activity"
+    echo "  netdev        - Network activity (specify interface)"
+    echo "  panic         - Blinks on kernel panic"
+    echo
+    echo "Examples:"
+    echo "  $0 list"
+    echo "  $0 radxa:blue:user heartbeat"
+    echo "  $0 radxa:green:power none"
+    echo "  $0 radxa:blue:user netdev wlan0"
+    echo
+}
+
+if [[ -z "$1" ]] || [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+if [[ "$1" == "install" ]]; then
+    do_install
+    exit 0
+fi
+
+if [[ "$1" == "uninstall" ]]; then
+    do_uninstall
+    exit 0
+fi
+
+if [[ "$1" == "list" ]]; then
+    echo "LEDs and current modes:"
+    list_leds
+    exit 0
+fi
+
+if [[ "$1" == "triggers" ]]; then
+    if [[ -z "$2" ]]; then
+        echo "Usage: $0 triggers <led>"
+        exit 1
+    fi
+    list_triggers "$2"
+    exit 0
+fi
+
+LED_NAME="$1"
+MODE="$2"
+INTERFACE="$3"
+LED_PATH="$LED_BASE/$LED_NAME"
+TRIGGER_PATH="$LED_PATH/trigger"
+CONFIG_FILE="$CONFIG_DIR/led-$(echo "$LED_NAME" | tr ':' '-')"
+
+if [[ ! -d "$LED_PATH" ]]; then
+    echo "Error: LED '$LED_NAME' not found"
+    echo "Available LEDs:"
+    list_leds
+    exit 1
+fi
+
+if [[ -z "$MODE" ]]; then
+    echo "Current mode for $LED_NAME:"
+    grep -o '\[.*\]' "$TRIGGER_PATH" | tr -d '[]'
+    exit 0
+fi
+
+# Apply immediately
+echo "$MODE" | sudo tee "$TRIGGER_PATH" > /dev/null || { echo "Error setting LED"; exit 1; }
+
+# If netdev mode with interface specified, configure it
+if [[ "$MODE" == "netdev" && -n "$INTERFACE" ]]; then
+    echo "$INTERFACE" | sudo tee "$LED_PATH/device_name" > /dev/null
+fi
+
+msg="$LED_NAME -> $MODE"
+[[ "$MODE" == "netdev" && -n "$INTERFACE" ]] && msg="$msg on $INTERFACE"
+if is_installed; then
+    echo "$msg (persisted)"
+else
+    echo "$msg (run '$0 install' to persist across reboots)"
+fi
+
+# Save for persistence across reboots
+echo "$MODE" | sudo tee "$CONFIG_FILE" > /dev/null
+if [[ "$MODE" == "netdev" && -n "$INTERFACE" ]]; then
+    echo "$INTERFACE" | sudo tee "$CONFIG_FILE.interface" > /dev/null
+fi
