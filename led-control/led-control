@@ -168,6 +168,13 @@ fi
 
 require_root
 
+# Validate the trigger is supported
+if ! grep -wq "$MODE" "$TRIGGER_PATH"; then
+    echo "Error: Trigger '$MODE' not supported for LED '$LED_NAME'"
+    echo "To see supported triggers, run: $0 triggers $LED_NAME"
+    exit 1
+fi
+
 # Apply immediately
 echo "$MODE" | sudo tee "$TRIGGER_PATH" > /dev/null || { echo "Error setting LED"; exit 1; }
 
