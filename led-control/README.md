@@ -13,7 +13,7 @@ ssh user@your-board chmod +x ~/led-control
 ./led-control list
 
 # Turn off that annoying blinking blue LED
-./led-control radxa:blue:user none
+./led-control blue:user none
 
 # Make it persist across reboots
 ./led-control install
@@ -59,8 +59,8 @@ Settings are saved to `/etc/default/led-*` every time you set a mode, so you can
 
 ```bash
 # Set your LEDs how you like them
-./led-control radxa:blue:user none
-./led-control radxa:green:power heartbeat
+./led-control blue:user none
+./led-control green:status heartbeat
 
 # Then persist
 ./led-control install

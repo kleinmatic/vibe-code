@@ -7,6 +7,13 @@ CONFIG_DIR="/etc/default"
 SERVICE_NAME="led-defaults"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 
+require_root() {
+    if [[ $EUID -ne 0 ]] && ! sudo -n true 2>/dev/null; then
+        echo "This operation requires root access. Run with sudo or ensure your user has sudo privileges."
+        exit 1
+    fi
+}
+
 is_installed() {
     [[ -f "$SERVICE_PATH" ]] && systemctl is-enabled "$SERVICE_NAME" &>/dev/null
 }
@@ -96,9 +103,9 @@ show_help() {
     echo
     echo "Examples:"
     echo "  $0 list"
-    echo "  $0 radxa:blue:user heartbeat"
-    echo "  $0 radxa:green:power none"
-    echo "  $0 radxa:blue:user netdev wlan0"
+    echo "  $0 green:status heartbeat"
+    echo "  $0 blue:user none"
+    echo "  $0 green:status netdev wlan0"
     echo
 }
 
@@ -113,11 +120,13 @@ if [[ -z "$1" ]] || [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
 fi
 
 if [[ "$1" == "install" ]]; then
+    require_root
     do_install
     exit 0
 fi
 
 if [[ "$1" == "uninstall" ]]; then
+    require_root
     do_uninstall
     exit 0
 fi
@@ -156,6 +165,8 @@ if [[ -z "$MODE" ]]; then
     grep -o '\[.*\]' "$TRIGGER_PATH" | tr -d '[]'
     exit 0
 fi
+
+require_root
 
 # Apply immediately
 echo "$MODE" | sudo tee "$TRIGGER_PATH" > /dev/null || { echo "Error setting LED"; exit 1; }
