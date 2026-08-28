@@ -12,3 +12,6 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Antigravity CLI local session symlinks
+.antigravitycli/

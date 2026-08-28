@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nadsat Dictionary — A Clockwork Orange Lexicon</title>
+  
+  <!-- SEO Meta Tags -->
+  <meta name="description" content="An interactive, high-fidelity web dictionary for Nadsat, the fictional Anglo-Russian slang from Anthony Burgess's 'A Clockwork Orange'. Explore translations, etymologies, and origins.">
+  <meta name="keywords" content="Nadsat, Clockwork Orange, Anthony Burgess, Slang, Russian-English Slang, Lexicon, Dictionary">
+  
+  <!-- Google Fonts for Outfit (Display) and Inter (Body) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Outfit:wght@400;500;600;700;800&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+  
+  <!-- Stylesheets -->
+  <link rel="stylesheet" href="index.css">
+</head>
+<body>
+
+  <!-- Background Decorative Glowing Orbs for Cyberpunk Atmosphere -->
+  <div class="glow-orb orb-primary" aria-hidden="true"></div>
+  <div class="glow-orb orb-secondary" aria-hidden="true"></div>
+
+  <div class="app-container">
+    
+    <!-- Header Section -->
+    <header class="app-header">
+      <div class="logo-area">
+        <svg class="korova-icon" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <!-- Bowler Hat -->
+          <path d="M22 46 C22 23, 78 23, 78 46 L82 46 C86 46, 86 52, 78 52 L22 52 C14 52, 14 46, 18 46 Z" fill="currentColor"/>
+          <rect x="33" y="44" width="34" height="4" fill="var(--primary-color)"/>
+          <!-- Organic/Terrifying Eye with Exaggerated Long Spiky Eyelashes -->
+          <path d="M36 70 C36 70, 50 56, 64 70 C64 70, 50 82, 36 70 Z" fill="none" stroke="currentColor" stroke-width="2.5"/>
+          <circle cx="50" cy="70" r="5" fill="currentColor"/>
+          <!-- Long spiky eyelashes underneath the eye (Alex's signature look) -->
+          <line x1="50" y1="76" x2="50" y2="87" stroke="var(--primary-color)" stroke-width="3" stroke-linecap="round"/>
+          <line x1="44" y1="75" x2="38" y2="83" stroke="var(--primary-color)" stroke-width="2.5" stroke-linecap="round"/>
+          <line x1="56" y1="75" x2="62" y2="83" stroke="var(--primary-color)" stroke-width="2.5" stroke-linecap="round"/>
+          <line x1="39" y1="72" x2="30" y2="78" stroke="var(--primary-color)" stroke-width="2" stroke-linecap="round"/>
+          <line x1="61" y1="72" x2="70" y2="78" stroke="var(--primary-color)" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <div class="logo-title-group">
+          <h1 class="logo-text" id="app-title">Nadsat<span class="highlight">.</span></h1>
+          <p class="logo-subtitle">The Govoreet of the Droogs</p>
+        </div>
+      </div>
+      <div class="header-badge">
+        <span class="badge-dot"></span>
+        <span class="badge-text">v1.0.0 — Embedded Veshches</span>
+      </div>
+    </header>
+
+    <!-- Main Layout Grid -->
+    <main class="main-content">
+      
+      <!-- Left/Top Section: Search, Filters, and Dictionary List -->
+      <section class="dictionary-explorer">
+        
+        <!-- Interactive Controls Card -->
+        <div class="controls-panel glass-panel">
+          <div class="search-wrapper">
+            <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <input 
+              type="text" 
+              id="search-input" 
+              placeholder="Search for nadsat veshches, meanings, or etymologies..." 
+              autocomplete="off"
+              aria-label="Search Nadsat words"
+            >
+            <button id="clear-search-btn" class="clear-btn" aria-label="Clear search" style="display: none;">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+          </div>
+          
+          <!-- Alphabet Quick-Filter Navigation -->
+          <div class="alphabet-nav-container">
+            <span class="nav-label">Filter by Letter:</span>
+            <nav class="alphabet-nav" id="alphabet-filter-nav" aria-label="Alphabetical word filtering">
+              <button class="letter-tag active" data-letter="all" id="filter-all-btn">ALL</button>
+              <!-- A-Z buttons will be dynamically rendered to check matching status -->
+            </nav>
+          </div>
+        </div>
+
+        <!-- Dictionary Cards Feed Container -->
+        <div class="results-header">
+          <h2 class="section-title"><span id="results-count">0</span> veshches viddied</h2>
+          <div class="sorting-controls">
+            <span class="sort-label">Lexicon:</span>
+            <span class="sort-value" id="lexicon-size">0</span>
+          </div>
+        </div>
+
+        <!-- Scrollable Feed -->
+        <div class="dictionary-grid" id="dictionary-feed" role="region" aria-live="polite">
+          <!-- Cards will be dynamically injected here -->
+        </div>
+
+        <!-- Empty Search / No Match State -->
+        <div class="empty-state glass-panel" id="no-results-state" style="display: none;">
+          <div class="empty-icon-wrapper">
+            <svg class="empty-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="8" x2="12" y2="12"></line>
+              <line x1="12" y1="16" x2="12.01" y2="16"></line>
+            </svg>
+          </div>
+          <h3>No Nadsat Veshches Viddied</h3>
+          <p>We couldn't viddy any translation matching "<span id="empty-query-text">query</span>". Try reset or lookup another word.</p>
+          <button class="action-btn" id="reset-explorer-btn">Appy Polly Loggies, Reset Everything</button>
+        </div>
+
+      </section>
+
+      <!-- Right/Sidebar Section: Interactive "Viddy" Feature & Etymology Explainer -->
+      <aside class="sidebar-layout">
+        
+        <!-- Random Word Card (The Interactive Showcase Feature) -->
+        <div class="widget-card glass-panel interactive-showcase" id="random-word-showcase">
+          <div class="widget-header">
+            <span class="widget-badge">Viddy This</span>
+            <h3 class="widget-title">Random Veshch</h3>
+          </div>
+          
+          <div class="random-card-body" id="random-card-content">
+            <!-- Dynamic random content -->
+            <div class="random-loading">Loading a random droogy veshch...</div>
+          </div>
+          
+          <button class="action-btn primary-glow-btn" id="viddy-random-btn">
+            <svg class="btn-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path></svg>
+            Viddy Another Veshch
+          </button>
+        </div>
+
+        <!-- Quick Slang Guide Widget -->
+        <div class="widget-card glass-panel info-widget">
+          <h3 class="widget-title">About this Govoreet</h3>
+          <div class="info-body">
+            <p><strong>Nadsat</strong> is a fictional slang dialect used by the teenagers in Anthony Burgess's 1962 novel <em>A Clockwork Orange</em>.</p>
+            <p>Rather than a complete language, it is an English-based argot where many nouns, verbs, and adjectives are replaced with words derived from <strong>Russian</strong> (e.g. <em>droog</em> from друг for friend, <em>baboochka</em> from бабушка for grandmother), Cockney rhyming slang, and schoolboy jargon.</p>
+            <div class="info-stat-strip">
+              <div class="stat-box">
+                <span class="stat-num" id="info-stat-russian">90%</span>
+                <span class="stat-lbl">Russian Roots</span>
+              </div>
+              <div class="stat-box">
+                <span class="stat-num" id="info-stat-slang">10%</span>
+                <span class="stat-lbl">Rhyme & Play</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </aside>
+
+    </main>
+
+    <!-- Footer Section -->
+    <footer class="app-footer">
+      <p class="copyright">Nadsat Dictionary compiled from <a href="https://en.wiktionary.org/wiki/Appendix:A_Clockwork_Orange" target="_blank" rel="noopener noreferrer">Wiktionary</a>. Licensed under Creative Commons BY-SA.</p>
+      <p class="author-credits">Stitch-powered vibe design interface created in pair programming.</p>
+    </footer>
+
+  </div>
+
+  <!-- Javascript Modules -->
+  <!-- dictionary.js contains DICTIONARY_DATA -->
+  <script src="dictionary.js"></script>
+  <!-- app.js contains the active logic -->
+  <script src="app.js"></script>
+</body>
+</html>
