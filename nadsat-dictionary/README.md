@@ -13,7 +13,16 @@ A command-line tool for exploring Nadsat, the fictional slang from Anthony Burge
 
 # Look up a specific word
 ./nadsat droog
+
+# Get up to 3 random words with exactly 5 characters
+./nadsat --length 5
+
+# Short form
+./nadsat -l 5
 ```
+
+Length is measured against the searchable Nadsat spelling, including spaces and
+punctuation in multi-word or hyphenated entries.
 
 ## Installation
 

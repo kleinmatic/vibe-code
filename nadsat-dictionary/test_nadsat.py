@@ -13,7 +13,13 @@ import tempfile
 import shutil
 
 # Import the functions from nadsat (uses nadsat.py symlink for testing)
-from nadsat import load_dictionary_from_data, get_words_by_letter, find_word, display_word
+from nadsat import (
+    display_word,
+    find_word,
+    get_words_by_length,
+    get_words_by_letter,
+    load_dictionary_from_data,
+)
 
 
 class TestLoadDictionary(unittest.TestCase):
@@ -256,6 +262,26 @@ class TestFindWord(unittest.TestCase):
         self.assertEqual(full['original_nadsat'], alt['original_nadsat'])
 
 
+class TestGetWordsByLength(unittest.TestCase):
+    """Tests for the get_words_by_length() function."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.words = load_dictionary_from_data()
+
+    def test_get_words_by_length(self):
+        """Returns words with exactly the requested number of characters."""
+        results = get_words_by_length(self.words, 5)
+
+        self.assertGreater(len(results), 0)
+        self.assertIn('droog', [word['nadsat'] for word in results])
+        self.assertTrue(all(len(word['nadsat']) == 5 for word in results))
+
+    def test_get_words_by_length_no_matches(self):
+        """Returns an empty list when no spelling has the requested length."""
+        self.assertEqual(get_words_by_length(self.words, 1000), [])
+
+
 class TestDisplayWord(unittest.TestCase):
     """Tests for the display_word() function"""
 
@@ -298,6 +324,17 @@ class TestDisplayWord(unittest.TestCase):
         self.assertIn('viddy', output)
         self.assertIn('see', output)
         self.assertIn('Origin:', output)
+
+    def test_display_can_show_searchable_form(self):
+        """Filters can display an individual synonym instead of its source label."""
+        word = find_word(self.words, 'guff')
+
+        with patch('sys.stdout', new=StringIO()) as fake_out:
+            display_word(word, use_searchable_form=True)
+            output = fake_out.getvalue()
+
+        self.assertIn('\nguff\n', output)
+        self.assertNotIn('guff, guffaw', output)
 
 
 class TestMainIntegration(unittest.TestCase):
@@ -410,6 +447,50 @@ class TestMainIntegration(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn('droog', result.stdout.lower())
         self.assertIn('friend', result.stdout)
+
+    def test_length_short_option_returns_words(self):
+        """'-l 5' returns up to three five-character words."""
+        result = self.run_script('-l', '5')
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('of Length 5', result.stdout)
+        self.assertIn('English:', result.stdout)
+
+    def test_length_long_option_returns_words(self):
+        """'--length 5' supports the descriptive option name."""
+        result = self.run_script('--length', '5')
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('of Length 5', result.stdout)
+
+    def test_length_equals_syntax_returns_words(self):
+        """'--length=5' supports conventional equals syntax."""
+        result = self.run_script('--length=5')
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('of Length 5', result.stdout)
+
+    def test_invalid_length_is_rejected(self):
+        """Length must be a positive integer."""
+        for value in ['nope', '0', '-2']:
+            with self.subTest(value=value):
+                result = self.run_script('--length', value)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn('positive integer', result.stderr)
+
+    def test_missing_length_is_rejected(self):
+        """The length option requires a value."""
+        result = self.run_script('--length')
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('requires a positive integer', result.stderr)
+
+    def test_length_with_no_matches(self):
+        """A valid length with no matches produces a clear message."""
+        result = self.run_script('--length', '1000')
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('No Nadsat words found with length 1000', result.stdout)
 
     def test_too_many_arguments(self):
         """Shows usage message"""

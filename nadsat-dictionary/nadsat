@@ -9,7 +9,7 @@ import random
 import sys
 import re
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 DICTIONARY_DATA = [
     {"Nadsat": "appy polly loggies", "English": "apologies", "Word origin": "Highly exaggerated pronunciation of apologies \u2013 Burgess's homage to James \nJoyce's ALP in *Finnegans Wake*"},
@@ -388,6 +388,11 @@ def get_words_by_letter(words, letter):
     return matching
 
 
+def get_words_by_length(words, length):
+    """Get all words whose searchable Nadsat spelling has the given length."""
+    return [w for w in words if len(w['nadsat']) == length]
+
+
 def find_word(words, search_term):
     """Find exact match for a word (case-insensitive)."""
     search_term = search_term.lower()
@@ -397,11 +402,44 @@ def find_word(words, search_term):
     return None
 
 
-def display_word(word):
+def display_word(word, use_searchable_form=False):
     """Display a word with its definition and origin."""
-    print(f"\n{word['original_nadsat']}")
+    display_name = word['nadsat'] if use_searchable_form else word['original_nadsat']
+    print(f"\n{display_name}")
     print(f"  English: {word['english']}")
     print(f"  Origin: {word['origin']}\n")
+
+
+def display_length_matches(words, length):
+    """Display up to three random words with the requested length."""
+    matching = get_words_by_length(words, length)
+
+    if not matching:
+        print(f"\nNo Nadsat words found with length {length}")
+        return
+
+    sample_size = min(3, len(matching))
+    selected = random.sample(matching, sample_size)
+
+    print(f"\n=== {sample_size} Random Nadsat Word(s) of Length {length} ===")
+    for word in selected:
+        # Show the exact form that matched so its displayed length is unambiguous.
+        display_word(word, use_searchable_form=True)
+
+
+def parse_length(value):
+    """Parse a command-line length value, exiting with a useful error if invalid."""
+    try:
+        length = int(value)
+    except ValueError:
+        print("Error: length must be a positive integer.", file=sys.stderr)
+        sys.exit(1)
+
+    if length <= 0:
+        print("Error: length must be a positive integer.", file=sys.stderr)
+        sys.exit(1)
+
+    return length
 
 
 def main():
@@ -429,8 +467,20 @@ def main():
         print("\n=== Random Nadsat Word ===")
         display_word(random_word)
 
+    elif len(sys.argv) == 3 and sys.argv[1] in ['-l', '--length']:
+        length = parse_length(sys.argv[2].strip())
+        display_length_matches(words, length)
+
+    elif len(sys.argv) == 2 and sys.argv[1].startswith('--length='):
+        length = parse_length(sys.argv[1].split('=', 1)[1].strip())
+        display_length_matches(words, length)
+
     elif len(sys.argv) == 2:
         arg = sys.argv[1].strip()
+
+        if arg in ['-l', '--length']:
+            print("Error: --length requires a positive integer.", file=sys.stderr)
+            sys.exit(1)
 
         if len(arg) == 1:
             # Single letter - return 3 random words starting with that letter
@@ -464,6 +514,7 @@ def main():
         print("  nadsat                - Get a random Nadsat word")
         print("  nadsat <letter>       - Get 3 random words starting with that letter")
         print("  nadsat <word>         - Look up a specific word")
+        print("  nadsat -l, --length N - Get 3 random words of a particular length")
         print("  nadsat -v, --version  - Show version and credits")
         sys.exit(1)
 
