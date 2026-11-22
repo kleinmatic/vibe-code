@@ -17,9 +17,6 @@ Raspberry Pi system health checker with model-aware diagnostics (temperature, po
 ### [python-datawrapper](./python-datawrapper)
 Example scripts using the Datawrapper Python API to build and publish an annual totals chart from CSV data.
 
-### [republicain](./republicain)
-French Republican almanac for the terminal in portable C: the Revolutionary date, decimal time, and the day's rural dedication as a login greeting.
-
 ### [wikipedia-date-app](./wikipedia-date-app)
 Find Wikipedia articles containing specific dates. Includes both Python CLI and Svelte web app.
 
@@ -30,4 +27,3 @@ These projects were developed with AI assistance, including Claude Code.
 ## License
 
 BSD 3-Clause License - See [LICENSE.md](./LICENSE.md) file for details.
-The exception is [republicain](./republicain), which is under the GNU General Public License, version 2; see [its LICENSE](./republicain/LICENSE).
