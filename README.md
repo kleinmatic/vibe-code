@@ -6,7 +6,7 @@ _This is a collection of small projects and experiments. Mostly just me playing 
 Single-file Linux SBC LED control utility (sysfs triggers) with optional systemd persistence across reboots.
 
 ### [nadsat-dictionary](./nadsat-dictionary)
-Command-line dictionary tool for Nadsat, the fictional slang from "A Clockwork Orange".
+Command-line dictionary tool for Nadsat, the fictional slang from "A Clockwork Orange", and Newspeak, the official language of "Nineteen Eighty-Four".
 
 ### [npa-nicar-analysis](./npa-nicar-analysis)
 Jupyter notebook analysis of NICAR-L LISTSERV archives, including monthly post counts from 2002 to 2023.

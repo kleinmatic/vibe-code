@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+"""Launcher: runs lexicon with the newspeak dictionary. Takes the same options."""
+import importlib.machinery
+import importlib.util
+import os
+import sys
+
+path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lexicon")
+loader = importlib.machinery.SourceFileLoader("lexicon", path)
+spec = importlib.util.spec_from_loader("lexicon", loader)
+lexicon = importlib.util.module_from_spec(spec)
+loader.exec_module(lexicon)
+lexicon.main(["newspeak"] + sys.argv[1:])

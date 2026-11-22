@@ -21,3 +21,6 @@ nadsat.py
 # OS files
 .DS_Store
 Thumbs.db
+
+# Downloaded source text (not public domain in the US; never commit)
+.cache/
